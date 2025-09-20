@@ -293,4 +293,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    main()
+    start_mood_thread('Billy')
+    start_mood_thread('Anna')
+    start_mood_thread('Sleepy')
+    while True:
+        time.sleep(1)
     sys.exit(main())
