@@ -40,6 +40,8 @@ uv run python main.py
 
 Note: Network calls happen only when executed as a script (not at import). A timeout is always applied to prevent hangs when the bridge is unreachable.
 
+When you run `python main.py`, it will first fetch and print the Hue bridge root state, then start the interactive mood lighting application. Press ESC (or Ctrl-C) to stop; bulbs will be restored to their original state.
+
 ## Environment Variables
 
 - HUE_USER_ID (required at runtime)
@@ -52,6 +54,15 @@ Note: Network calls happen only when executed as a script (not at import). A tim
   - Timeout (in seconds) for network requests.
 - HUE_MOOD_MAX_SECONDS (optional; default: `30.0`)
   - Maximum transition duration used by mood lighting when picking a random duration.
+- HUE_MOOD_BULBS (optional)
+  - Comma-separated list of bulb names to run mood lighting on. If not set, all bulbs
+    discovered on the bridge will be used by default.
+
+CLI equivalents:
+- --mood-max-seconds or -M
+- --bulbs or -b
+
+Precedence: CLI options > environment variables > bridge discovery defaults.
 
 ## Testing
 
@@ -94,6 +105,10 @@ PY
 - Control the maximum random transition duration for mood lighting via either:
   - Environment: `export HUE_MOOD_MAX_SECONDS=10.0`
   - CLI flag: `uv run python main.py --mood-max-seconds 10.0` (or `-M 10.0`)
+- Selecting bulbs for mood lighting:
+  - Default: all bulbs discovered on the bridge are used.
+  - Environment: `export HUE_MOOD_BULBS="Kitchen,Living Room"`
+  - CLI flag: `uv run python main.py --bulbs "Kitchen,Living Room"` (or `-b "Kitchen,Living Room"`)
 - Ensure the bridge is reachable; each request uses a timeout to prevent hangs.
 
 ### Stopping mood lighting safely
@@ -127,7 +142,7 @@ A single argument will be passed which is the name of the bulb.
 1. If the bulb is currently off then turn it on.
 2. Get the current color and brightness of the bulb.
 3. Generate a random color and brightness.
-4. Generate a random transition time between 0.5 and 30 seonds.
+4. Generate a random transition time between 0.5 seconds and a configurable maximum (default 30.0 seconds).
 5. Calculate the number of 0.1 second steps to get to the new color.
 6. Calculate the increment in brightness for each step.
 7. Calculate the increment in color for each step.

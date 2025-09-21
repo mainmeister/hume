@@ -360,6 +360,109 @@ def start_mood_thread(bulb_name: str, stop_event: threading.Event | None = None)
     return t
 
 
+def _parse_csv_names(value: str | None) -> list[str]:
+    if not value:
+        return []
+    parts = [p.strip() for p in str(value).split(",")]
+    return [p for p in parts if p]
+
+
+def _unique_preserve_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for it in items:
+        if it not in seen:
+            seen.add(it)
+            out.append(it)
+    return out
+
+
+def _get_cli_bulb_names(argv: list[str] | None = None) -> list[str] | None:
+    """Parse bulb names from CLI.
+
+    Supports:
+    --bulbs=CSV
+    --bulbs CSV
+    -b CSV
+    Returns None if not provided or empty.
+    """
+    if argv is None:
+        argv = sys.argv[1:] if isinstance(sys.argv, list) else []
+
+    # --bulbs=VALUE
+    for arg in argv:
+        if isinstance(arg, str) and arg.startswith("--bulbs="):
+            names = _parse_csv_names(arg.split("=", 1)[1])
+            return names or None
+
+    # --bulbs VALUE and -b VALUE
+    for i, arg in enumerate(argv):
+        if arg == "--bulbs" and i + 1 < len(argv):
+            names = _parse_csv_names(argv[i + 1])
+            return names or None
+        if arg == "-b" and i + 1 < len(argv):
+            names = _parse_csv_names(argv[i + 1])
+            return names or None
+
+    return None
+
+
+def _get_env_bulb_names() -> list[str] | None:
+    env_val = os.getenv("HUE_MOOD_BULBS")
+    names = _parse_csv_names(env_val)
+    return names or None
+
+
+def get_mood_bulb_names(base_url: str, timeout: float = 5.0) -> list[str]:
+    """Determine which bulb names to run mood on.
+
+    Precedence:
+    1) CLI (--bulbs/-b) if provided
+    2) Environment (HUE_MOOD_BULBS)
+    3) Default: all bulbs on the bridge (via /lights)
+    """
+    # 1) CLI
+    cli = _get_cli_bulb_names()
+    if cli:
+        names = _unique_preserve_order([n for n in cli if n])
+        logger.debug("Using bulb names from CLI: %s", ", ".join(names))
+        return names
+
+    # 2) ENV
+    env_names = _get_env_bulb_names()
+    if env_names:
+        names = _unique_preserve_order([n for n in env_names if n])
+        logger.debug("Using bulb names from HUE_MOOD_BULBS: %s", ", ".join(names))
+        return names
+
+    # 3) Default to all bulbs discovered from the bridge
+    try:
+        lights = get_lights(base_url, timeout=timeout) or {}
+    except requests.exceptions.RequestException as e:
+        logger.error("Failed to list bulbs from Hue Bridge: %s", e)
+        return []
+
+    # Sort by numeric id for determinism
+    def _id_key(item: tuple[str, Any]) -> int:
+        try:
+            return int(item[0])
+        except Exception:
+            return 0
+
+    names: list[str] = []
+    for lid, info in sorted(lights.items(), key=_id_key):
+        try:
+            name = str(info.get("name", "")).strip()
+        except Exception:
+            name = ""
+        if name:
+            names.append(name)
+
+    names = _unique_preserve_order(names)
+    logger.debug("Discovered bulbs for mood: %s", ", ".join(names) if names else "<none>")
+    return names
+
+
 def _wait_for_escape_or_sigint() -> None:
     """Block until ESC is pressed or a KeyboardInterrupt (Ctrl-C) occurs.
 
@@ -410,12 +513,28 @@ def _wait_for_escape_or_sigint() -> None:
 
 
 def run_mood_application() -> None:
-    """Start mood threads for predefined bulbs and wait for ESC/Ctrl-C to stop.
+    """Start mood threads for selected bulbs and wait for ESC/Ctrl-C to stop.
 
-    On shutdown, signals all threads to stop and waits for a clean restore of
-    original light states.
+    Selection defaults to all bulbs discovered on the bridge. Override via:
+    - CLI: --bulbs "Name1,Name2" (or -b "Name1,Name2")
+    - Env: HUE_MOOD_BULBS="Name1,Name2"
     """
-    bulbs = ["Billy", "Anna", "Sleepy"]
+    cfg = load_config()
+    user_id = cfg.get("user_id")
+    bridge_ip = cfg.get("bridge_ip")
+    timeout = float(cfg.get("timeout", 5.0))
+
+    if not user_id:
+        logger.error("HUE_USER_ID is not set; cannot start mood application.")
+        return
+
+    base_url = build_base_url(user_id, bridge_ip)
+
+    bulbs = get_mood_bulb_names(base_url, timeout=timeout)
+    if not bulbs:
+        logger.warning("No bulbs available or specified; nothing to do.")
+        return
+
     stop_event = threading.Event()
     threads = []
     for name in bulbs:
@@ -468,6 +587,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    main()
-    # Start interactive mood application that can be stopped with ESC/Ctrl-C
-    run_mood_application()
+    rc = main()
+    if rc == 0:
+        # Start interactive mood application that can be stopped with ESC/Ctrl-C
+        run_mood_application()
