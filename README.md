@@ -96,6 +96,29 @@ PY
   - CLI flag: `uv run python main.py --mood-max-seconds 10.0` (or `-M 10.0`)
 - Ensure the bridge is reachable; each request uses a timeout to prevent hangs.
 
+### Stopping mood lighting safely
+
+- When running `python main.py` directly, you can press ESC (or Ctrl-C) to stop the
+  application loop. All mood threads are signaled to stop and each bulb is restored to its
+  original color, brightness, and on/off state.
+- Programmatic control: supply a threading.Event to `start_mood_thread()` and set it to
+  request a clean stop with restoration.
+
+Example:
+
+```python
+import threading, time, main
+stop_event = threading.Event()
+main.setup_logging("INFO")
+# Start for one bulb with cooperative stop
+thread = main.start_mood_thread("Living Room", stop_event)
+# Let it run briefly
+time.sleep(5)
+# Ask it to stop and wait
+stop_event.set()
+thread.join()
+```
+
 ## Development
 This project will create a real time random dynamic mood lighting based 
 on the hue color bulbs.

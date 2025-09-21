@@ -212,11 +212,16 @@ def _get_mood_max_seconds(default: float = 30.0) -> float:
     return float(value)
 
 
-def mood(bulb_name: str) -> None:
+def mood(
+    bulb_name: str,
+    *,
+    stop_event: Optional["threading.Event"] = None,
+    restore_on_exit: bool = True,
+) -> None:
     """Run a real-time random dynamic mood lighting loop for the given bulb name.
 
     This function is designed to be used as a thread target. It will run indefinitely
-    until the hosting process stops. It reads configuration from environment via
+    until asked to stop via stop_event. It reads configuration from environment via
     load_config() at call time and performs no network at import time.
     """
     cfg = load_config()
@@ -252,6 +257,9 @@ def mood(bulb_name: str) -> None:
     cur_hue = int(state.get("hue", 0))
     cur_sat = int(state.get("sat", 200))
 
+    # Preserve original state for restoration on exit
+    orig_on, orig_bri, orig_hue, orig_sat = is_on, cur_bri, cur_hue, cur_sat
+
     if not is_on:
         try:
             set_light_state(base_url, light_id, on=True, timeout=timeout)
@@ -262,57 +270,166 @@ def mood(bulb_name: str) -> None:
 
     logger.info("Starting mood loop for '%s' (id=%s)", bulb_name, light_id)
 
-    while True:
-        # 3. Generate random target color (hue/sat) and brightness
-        tgt_hue = random.randint(0, 65535)
-        tgt_sat = random.randint(150, 254)
-        tgt_bri = random.randint(10, 254)
+    try:
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                break
 
-        # 4. Random transition time between 0.5 seconds and configured max (default 30.0)
-        max_seconds = _get_mood_max_seconds(30.0)
-        t_seconds = random.uniform(0.5, max_seconds)
+            # 3. Generate random target color (hue/sat) and brightness
+            tgt_hue = random.randint(0, 65535)
+            tgt_sat = random.randint(150, 254)
+            tgt_bri = random.randint(10, 254)
 
-        # 5. Number of 0.1s steps
-        steps = max(1, int(round(t_seconds / 0.1)))
+            # 4. Random transition time between 0.5 seconds and configured max (default 30.0)
+            max_seconds = _get_mood_max_seconds(30.0)
+            t_seconds = random.uniform(0.5, max_seconds)
 
-        # 6-7. Per-step increments
-        dhue = (tgt_hue - cur_hue) / steps
-        dsat = (tgt_sat - cur_sat) / steps
-        dbri = (tgt_bri - cur_bri) / steps
+            # 5. Number of 0.1s steps
+            steps = max(1, int(round(t_seconds / 0.1)))
 
-        # 8-9. Loop applying incremental updates
-        for i in range(1, steps + 1):
-            cur_hue = int(_clamp(round(cur_hue + dhue), 0, 65535))
-            cur_sat = int(_clamp(round(cur_sat + dsat), 0, 254))
-            cur_bri = int(_clamp(round(cur_bri + dbri), 1, 254))
+            # 6-7. Per-step increments
+            dhue = (tgt_hue - cur_hue) / steps
+            dsat = (tgt_sat - cur_sat) / steps
+            dbri = (tgt_bri - cur_bri) / steps
+
+            # 8-9. Loop applying incremental updates
+            for i in range(1, steps + 1):
+                if stop_event is not None and stop_event.is_set():
+                    break
+                cur_hue = int(_clamp(round(cur_hue + dhue), 0, 65535))
+                cur_sat = int(_clamp(round(cur_sat + dsat), 0, 254))
+                cur_bri = int(_clamp(round(cur_bri + dbri), 1, 254))
+                try:
+                    set_light_state(
+                        base_url,
+                        light_id,
+                        on=True,
+                        bri=cur_bri,
+                        hue=cur_hue,
+                        sat=cur_sat,
+                        # Using bridge-side 100ms transition to smooth micro-steps if desired
+                        transitiontime=0,
+                        timeout=timeout,
+                    )
+                except requests.exceptions.RequestException as e:
+                    logger.warning("Transient error setting light state: %s", e)
+                    # Continue trying next step after sleep
+                time.sleep(0.1)
+
+            # If we broke early due to stop_event, exit outer loop too
+            if stop_event is not None and stop_event.is_set():
+                break
+
+            # 10. Repeat with new random target (current already updated)
+            # Loop continues
+    finally:
+        # Attempt to restore original state when exiting the loop
+        if restore_on_exit:
             try:
                 set_light_state(
                     base_url,
                     light_id,
-                    on=True,
-                    bri=cur_bri,
-                    hue=cur_hue,
-                    sat=cur_sat,
-                    # Using bridge-side 100ms transition to smooth micro-steps if desired
+                    on=bool(orig_on),
+                    bri=int(orig_bri),
+                    hue=int(orig_hue),
+                    sat=int(orig_sat),
                     transitiontime=0,
                     timeout=timeout,
                 )
-            except requests.exceptions.RequestException as e:
-                logger.warning("Transient error setting light state: %s", e)
-                # Continue trying next step after sleep
-            time.sleep(0.1)
-
-        # 10. Repeat with new random target (current already updated)
-        # Loop continues
+                logger.info("Restored '%s' (id=%s) to original state", bulb_name, light_id)
+            except Exception as e:  # broader catch to ensure cleanup path doesn't raise
+                logger.warning("Failed to restore original state for light %s: %s", light_id, e)
 
 
 import threading
 
-def start_mood_thread(bulb_name: str) -> threading.Thread:
-    """Start the mood() loop in a daemon thread and return the thread."""
-    t = threading.Thread(target=mood, args=(bulb_name,), name=f"mood-{bulb_name}", daemon=True)
+def start_mood_thread(bulb_name: str, stop_event: threading.Event | None = None) -> threading.Thread:
+    """Start the mood() loop in a daemon thread and return the thread.
+
+    If stop_event is provided, the thread will exit when the event is set and
+    the light will be restored to its original state.
+    """
+    t = threading.Thread(
+        target=mood,
+        args=(bulb_name,),
+        kwargs={"stop_event": stop_event},
+        name=f"mood-{bulb_name}",
+        daemon=True,
+    )
     t.start()
     return t
+
+
+def _wait_for_escape_or_sigint() -> None:
+    """Block until ESC is pressed or a KeyboardInterrupt (Ctrl-C) occurs.
+
+    - On Windows uses msvcrt.kbhit/getwch.
+    - On POSIX terminals uses termios/tty with select for non-blocking key reads.
+    - If stdin is not a TTY, falls back to waiting for KeyboardInterrupt.
+    """
+    try:
+        # Windows
+        if os.name == "nt":
+            try:
+                import msvcrt  # type: ignore
+            except Exception:
+                # Fallback: wait for Ctrl-C
+                while True:
+                    time.sleep(0.2)
+            while True:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getwch()
+                    if ch and ord(ch) == 27:  # ESC
+                        return
+                time.sleep(0.1)
+        else:
+            # POSIX
+            import sys as _sys
+            import select as _select
+            if not _sys.stdin.isatty():
+                # Not a TTY; wait for Ctrl-C
+                while True:
+                    time.sleep(0.2)
+            import termios as _termios
+            import tty as _tty
+            fd = _sys.stdin.fileno()
+            old_settings = _termios.tcgetattr(fd)
+            try:
+                _tty.setcbreak(fd)
+                while True:
+                    r, _, _ = _select.select([_sys.stdin], [], [], 0.1)
+                    if r:
+                        ch = _sys.stdin.read(1)
+                        if ch == "\x1b":
+                            return
+            finally:
+                _termios.tcsetattr(fd, _termios.TCSADRAIN, old_settings)
+    except KeyboardInterrupt:
+        # Respect Ctrl-C everywhere
+        return
+
+
+def run_mood_application() -> None:
+    """Start mood threads for predefined bulbs and wait for ESC/Ctrl-C to stop.
+
+    On shutdown, signals all threads to stop and waits for a clean restore of
+    original light states.
+    """
+    bulbs = ["Billy", "Anna", "Sleepy"]
+    stop_event = threading.Event()
+    threads = []
+    for name in bulbs:
+        t = start_mood_thread(name, stop_event)
+        threads.append(t)
+    logger.info("Mood threads started for bulbs: %s", ", ".join(bulbs))
+    logger.info("Press ESC (or Ctrl-C) to stop and restore bulbs...")
+    _wait_for_escape_or_sigint()
+    logger.info("Stopping mood threads and restoring bulbs...")
+    stop_event.set()
+    # Join threads briefly; they restore on exit
+    for t in threads:
+        t.join(timeout=10.0)
+    logger.info("All mood threads stopped.")
 
 
 def main() -> int:
@@ -352,9 +469,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     main()
-    start_mood_thread('Billy')
-    start_mood_thread('Anna')
-    start_mood_thread('Sleepy')
-    while True:
-        time.sleep(1)
-    sys.exit(main())
+    # Start interactive mood application that can be stopped with ESC/Ctrl-C
+    run_mood_application()
