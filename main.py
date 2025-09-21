@@ -212,7 +212,7 @@ def mood(bulb_name: str) -> None:
         tgt_bri = random.randint(10, 254)
 
         # 4. Random transition time 0.5-5.0 seconds
-        t_seconds = random.uniform(0.5, 5.0)
+        t_seconds = random.uniform(0.5, 30.0)
 
         # 5. Number of 0.1s steps
         steps = max(1, int(round(t_seconds / 0.1)))
