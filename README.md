@@ -50,6 +50,8 @@ Note: Network calls happen only when executed as a script (not at import). A tim
   - Standard Python logging level.
 - REQUEST_TIMEOUT (optional; default: `5.0`)
   - Timeout (in seconds) for network requests.
+- HUE_MOOD_MAX_SECONDS (optional; default: `30.0`)
+  - Maximum transition duration used by mood lighting when picking a random duration.
 
 ## Testing
 
@@ -89,6 +91,9 @@ PY
 ```
 
 - Configure logging and timeouts via the same env vars described above.
+- Control the maximum random transition duration for mood lighting via either:
+  - Environment: `export HUE_MOOD_MAX_SECONDS=10.0`
+  - CLI flag: `uv run python main.py --mood-max-seconds 10.0` (or `-M 10.0`)
 - Ensure the bridge is reachable; each request uses a timeout to prevent hangs.
 
 ## Development

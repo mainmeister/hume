@@ -155,6 +155,63 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+def _get_mood_max_seconds(default: float = 30.0) -> float:
+    """Determine the max seconds for mood transitions.
+
+    Priority:
+    1) Command line: --mood-max-seconds=<float> or --mood-max-seconds <float> or -M <float>
+    2) Environment: HUE_MOOD_MAX_SECONDS=<float>
+    3) Default: 30.0
+    Values are clamped to a minimum of 0.5 seconds.
+    """
+    # 1) CLI parsing (no side effects at import; only read sys.argv when called)
+    argv = sys.argv[1:] if isinstance(sys.argv, list) else []
+    value: float | None = None
+
+    def _try_parse(s: str) -> float | None:
+        try:
+            return float(s)
+        except (TypeError, ValueError):
+            return None
+
+    # Support --mood-max-seconds=VALUE
+    for arg in argv:
+        if isinstance(arg, str) and arg.startswith("--mood-max-seconds="):
+            cand = _try_parse(arg.split("=", 1)[1])
+            if cand is not None:
+                value = cand
+                break
+
+    # Support --mood-max-seconds VALUE and -M VALUE
+    if value is None:
+        for i, arg in enumerate(argv):
+            if arg == "--mood-max-seconds" and i + 1 < len(argv):
+                cand = _try_parse(argv[i + 1])
+                if cand is not None:
+                    value = cand
+                    break
+            if arg == "-M" and i + 1 < len(argv):
+                cand = _try_parse(argv[i + 1])
+                if cand is not None:
+                    value = cand
+                    break
+
+    # 2) Environment fallback
+    if value is None:
+        env_raw = os.getenv("HUE_MOOD_MAX_SECONDS")
+        if env_raw is not None:
+            value = _try_parse(env_raw)
+
+    # 3) Default
+    if value is None:
+        value = default
+
+    # Clamp to sensible minimum (0.5s)
+    if value < 0.5:
+        value = 0.5
+    return float(value)
+
+
 def mood(bulb_name: str) -> None:
     """Run a real-time random dynamic mood lighting loop for the given bulb name.
 
@@ -211,8 +268,9 @@ def mood(bulb_name: str) -> None:
         tgt_sat = random.randint(150, 254)
         tgt_bri = random.randint(10, 254)
 
-        # 4. Random transition time 0.5-5.0 seconds
-        t_seconds = random.uniform(0.5, 30.0)
+        # 4. Random transition time between 0.5 seconds and configured max (default 30.0)
+        max_seconds = _get_mood_max_seconds(30.0)
+        t_seconds = random.uniform(0.5, max_seconds)
 
         # 5. Number of 0.1s steps
         steps = max(1, int(round(t_seconds / 0.1)))
