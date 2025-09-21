@@ -104,7 +104,7 @@ A single argument will be passed which is the name of the bulb.
 1. If the bulb is currently off then turn it on.
 2. Get the current color and brightness of the bulb.
 3. Generate a random color and brightness.
-4. Generate a random transition time between 0.5 and 5 seonds.
+4. Generate a random transition time between 0.5 and 30 seonds.
 5. Calculate the number of 0.1 second steps to get to the new color.
 6. Calculate the increment in brightness for each step.
 7. Calculate the increment in color for each step.
