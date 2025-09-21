@@ -55,8 +55,8 @@ When you run `python main.py`, it will first fetch and print the Hue bridge root
 - HUE_MOOD_MAX_SECONDS (optional; default: `30.0`)
   - Maximum transition duration used by mood lighting when picking a random duration.
 - HUE_MOOD_BULBS (optional)
-  - Comma-separated list of bulb names to run mood lighting on. If not set, all bulbs
-    discovered on the bridge will be used by default.
+  - Comma-separated list of bulb names to run mood lighting on. If not set, only bulbs of
+    type "Extended color light" discovered on the bridge will be used by default.
 
 CLI equivalents:
 - --mood-max-seconds or -M

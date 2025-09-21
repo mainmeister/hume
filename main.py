@@ -419,7 +419,7 @@ def get_mood_bulb_names(base_url: str, timeout: float = 5.0) -> list[str]:
     Precedence:
     1) CLI (--bulbs/-b) if provided
     2) Environment (HUE_MOOD_BULBS)
-    3) Default: all bulbs on the bridge (via /lights)
+    3) Default: bulbs of type "Extended color light" discovered from the bridge (via /lights)
     """
     # 1) CLI
     cli = _get_cli_bulb_names()
@@ -435,7 +435,7 @@ def get_mood_bulb_names(base_url: str, timeout: float = 5.0) -> list[str]:
         logger.debug("Using bulb names from HUE_MOOD_BULBS: %s", ", ".join(names))
         return names
 
-    # 3) Default to all bulbs discovered from the bridge
+    # 3) Default to bulbs of type "Extended color light" discovered from the bridge
     try:
         lights = get_lights(base_url, timeout=timeout) or {}
     except requests.exceptions.RequestException as e:
@@ -455,11 +455,16 @@ def get_mood_bulb_names(base_url: str, timeout: float = 5.0) -> list[str]:
             name = str(info.get("name", "")).strip()
         except Exception:
             name = ""
-        if name:
+        # Filter by type: only Extended color light by default
+        try:
+            ltype = str(info.get("type", "")).strip().lower()
+        except Exception:
+            ltype = ""
+        if name and ltype == "extended color light":
             names.append(name)
 
     names = _unique_preserve_order(names)
-    logger.debug("Discovered bulbs for mood: %s", ", ".join(names) if names else "<none>")
+    logger.debug("Discovered bulbs for mood (Extended color light only): %s", ", ".join(names) if names else "<none>")
     return names
 
 
