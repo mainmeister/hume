@@ -42,6 +42,10 @@ Note: Network calls happen only when executed as a script (not at import). A tim
 
 When you run `python main.py`, it will first fetch and print the Hue bridge root state, then start the interactive mood lighting application. Press ESC (or Ctrl-C) to stop; bulbs will be restored to their original state.
 
+To only display the Hue bridge configuration and exit without starting mood lighting, use the list flag:
+
+- `uv run python main.py --list` (or `-l`)
+
 ## Environment Variables
 
 - HUE_USER_ID (required at runtime)
@@ -59,6 +63,7 @@ When you run `python main.py`, it will first fetch and print the Hue bridge root
     type "Extended color light" discovered on the bridge will be used by default.
 
 CLI equivalents:
+- --list or -l: print the Hue bridge configuration and exit (no mood lighting)
 - --mood-max-seconds or -M
 - --bulbs or -b
 

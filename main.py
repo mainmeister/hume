@@ -592,7 +592,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # Detect list-only mode: when -l/--list is provided, we only display the
+    # Hue bridge configuration and exit without starting the mood application.
+    list_only = any(arg in ("-l", "--list") for arg in sys.argv[1:])
+
     rc = main()
-    if rc == 0:
+    if rc == 0 and not list_only:
         # Start interactive mood application that can be stopped with ESC/Ctrl-C
         run_mood_application()
