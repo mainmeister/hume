@@ -63,6 +63,7 @@ To only display the Hue bridge configuration and exit without starting mood ligh
     type "Extended color light" discovered on the bridge will be used by default.
 
 CLI equivalents:
+- --help or -h: show this help message and exit
 - --list or -l: print the Hue bridge configuration and exit (no mood lighting)
 - --mood-max-seconds or -M
 - --bulbs or -b

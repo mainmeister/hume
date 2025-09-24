@@ -592,6 +592,31 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # Help: show usage and exit without performing any network I/O or starting mood.
+    if any(arg in ("-h", "--help") for arg in sys.argv[1:]):
+        print(
+            """Usage: python main.py [options]
+
+Options:
+  -h, --help                  Show this help message and exit
+  -l, --list                  Fetch and display Hue bridge configuration, then exit
+  -M SEC, --mood-max-seconds SEC
+                              Maximum transition duration for mood lighting
+                              (default via HUE_MOOD_MAX_SECONDS)
+  -b NAMES, --bulbs NAMES     Comma-separated bulb names for mood lighting
+                              (default via HUE_MOOD_BULBS)
+
+Environment:
+  HUE_USER_ID                 Required at runtime
+  HUE_BRIDGE_IP               Hue bridge IP (default 192.168.1.2)
+  LOG_LEVEL                   Logging level (default INFO)
+  REQUEST_TIMEOUT             Network timeout seconds (default 5.0)
+  HUE_MOOD_MAX_SECONDS        Max transition seconds for mood lighting (default 30.0)
+  HUE_MOOD_BULBS              Bulb names, comma-separated
+"""
+        )
+        sys.exit(0)
+
     # Detect list-only mode: when -l/--list is provided, we only display the
     # Hue bridge configuration and exit without starting the mood application.
     list_only = any(arg in ("-l", "--list") for arg in sys.argv[1:])
