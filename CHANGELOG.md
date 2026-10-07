@@ -16,5 +16,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Safe termination mechanism for mood lighting loops with initial bulb state restoration on ESC key press ([86906df](https://github.com/mainmeister/hume/commit/86906df)).
 
 ### Changed
+- Display of bridge configuration, lights, groups, and devices formatted into clean, structured ASCII tables and grids instead of raw JSON.
 - Default bulb discovery to automatically filter for "Extended color light" bulbs when no bulb overrides are provided ([8953233](https://github.com/mainmeister/hume/commit/8953233)).
 - Interactive mood lighting launch flow to only start upon successful bridge initialization ([b05ff38](https://github.com/mainmeister/hume/commit/b05ff38)).

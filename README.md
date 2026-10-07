@@ -259,7 +259,9 @@ hume/
 └── tests/
     ├── test_bulb_selection.py  # Tests for CLI/env bulb filtering and precedence
     ├── test_config.py          # Tests for environment variable loading and validation
+    ├── test_daemon.py          # Tests for daemon mode and PID management
     ├── test_fetch.py           # Tests for bridge state fetching and JSON parsing
+    ├── test_format.py          # Tests for bridge state and table/grid formatting
     ├── test_import_and_main.py # Tests ensuring safe imports and main entry point behavior
     ├── test_integration.py     # Opt-in tests against live Hue Bridge hardware
     ├── test_mood_stop.py       # Tests for mood loop graceful stop and state restoration

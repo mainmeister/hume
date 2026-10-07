@@ -29,7 +29,7 @@ To fetch and display the Hue bridge's configuration without starting the mood li
 uv run python hume.py --list
 ```
 
-This will print a JSON object with the bridge's state and then exit.
+This will print formatted ASCII tables/grids with the bridge configuration, discovered lights, groups, and devices, and then exit.
 
 ### Managing Daemon Processes
 

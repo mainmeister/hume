@@ -420,6 +420,264 @@ def fetch_bridge_state(base_url: str, timeout: float = 5.0) -> Any:
         raise ValueError("Invalid JSON response from Hue Bridge") from e
 
 
+def format_table(headers: list[str], rows: list[list[Any]], title: str | None = None) -> str:
+    """Format tabular data into an ASCII grid/table string."""
+    max_row_len = max((len(r) for r in rows), default=0) if rows else 0
+    num_cols = max(len(headers), max_row_len)
+    if num_cols == 0:
+        return f"=== {title} ===\n(No data)" if title else ""
+
+    norm_headers = [str(h) for h in headers] if headers else []
+    while len(norm_headers) < num_cols:
+        norm_headers.append("")
+
+    norm_rows: list[list[str]] = []
+    for r in rows:
+        row_strs = [str(cell) if cell is not None else "" for cell in r]
+        while len(row_strs) < num_cols:
+            row_strs.append("")
+        norm_rows.append(row_strs)
+
+    col_widths = [len(h) for h in norm_headers]
+    for r in norm_rows:
+        for i, cell in enumerate(r):
+            col_widths[i] = max(col_widths[i], len(cell))
+
+    sep = "+" + "+".join("-" * (w + 2) for w in col_widths) + "+"
+    lines: list[str] = []
+
+    if title:
+        lines.append(f"=== {title} ===")
+
+    lines.append(sep)
+    if headers:
+        header_line = "| " + " | ".join(h.ljust(col_widths[i]) for i, h in enumerate(norm_headers)) + " |"
+        lines.append(header_line)
+        lines.append(sep)
+
+    for r in norm_rows:
+        row_line = "| " + " | ".join(cell.ljust(col_widths[i]) for i, cell in enumerate(r)) + " |"
+        lines.append(row_line)
+
+    lines.append(sep)
+    return "\n".join(lines)
+
+
+def _format_bridge_config_table(config: dict[str, Any]) -> str:
+    field_labels = [
+        ("name", "Bridge Name"),
+        ("modelid", "Model ID"),
+        ("bridgeid", "Bridge ID"),
+        ("ipaddress", "IP Address"),
+        ("mac", "MAC Address"),
+        ("apiversion", "API Version"),
+        ("swversion", "Software Version"),
+        ("zigbeechannel", "Zigbee Channel"),
+        ("timezone", "Timezone"),
+        ("localtime", "Local Time"),
+        ("gateway", "Gateway IP"),
+        ("netmask", "Netmask"),
+        ("dhcp", "DHCP"),
+        ("linkbutton", "Link Button"),
+    ]
+    rows: list[list[str]] = []
+    seen = set()
+    for key, label in field_labels:
+        if key in config:
+            val = config[key]
+            rows.append([label, str(val)])
+            seen.add(key)
+
+    for key, val in config.items():
+        if key not in seen and not isinstance(val, (dict, list)):
+            rows.append([str(key), str(val)])
+
+    if not rows:
+        return ""
+    return format_table(["Property", "Value"], rows, title="Bridge Configuration")
+
+
+def _format_lights_table(lights: dict[str, Any]) -> str:
+    headers = ["ID", "Name", "Type", "State", "Brightness", "Color Info", "Reachable", "Model ID"]
+    rows: list[list[str]] = []
+
+    def sort_key(k: str) -> tuple[int, str | int]:
+        return (0, int(k)) if k.isdigit() else (1, k)
+
+    for lid in sorted(lights.keys(), key=sort_key):
+        info = lights[lid]
+        if not isinstance(info, dict):
+            rows.append([str(lid), str(info), "-", "-", "-", "-", "-", "-"])
+            continue
+
+        name = str(info.get("name", "-"))
+        ltype = str(info.get("type", "-"))
+        modelid = str(info.get("modelid", "-"))
+        state = info.get("state", {}) if isinstance(info.get("state"), dict) else {}
+
+        on_val = state.get("on")
+        state_str = "ON" if on_val is True else ("OFF" if on_val is False else "-")
+
+        bri = state.get("bri")
+        if bri is not None and isinstance(bri, (int, float)):
+            pct = round((bri / 254.0) * 100)
+            bri_str = f"{int(bri)} ({pct}%)"
+        else:
+            bri_str = "-"
+
+        colormode = state.get("colormode")
+        if colormode == "hs" or ("hue" in state and "sat" in state):
+            h = state.get("hue")
+            s = state.get("sat")
+            color_str = f"hue:{h} sat:{s}"
+        elif colormode == "ct" or "ct" in state:
+            ct = state.get("ct")
+            color_str = f"ct:{ct}"
+        elif colormode == "xy" or "xy" in state:
+            xy = state.get("xy")
+            color_str = f"xy:{xy}"
+        else:
+            color_str = "-"
+
+        reachable_val = state.get("reachable")
+        reach_str = "Yes" if reachable_val is True else ("No" if reachable_val is False else "-")
+
+        rows.append([str(lid), name, ltype, state_str, bri_str, color_str, reach_str, modelid])
+
+    return format_table(headers, rows, title="Discovered Lights")
+
+
+def _format_groups_table(groups: dict[str, Any]) -> str:
+    headers = ["ID", "Group Name", "Type", "Lights", "State"]
+    rows: list[list[str]] = []
+
+    def sort_key(k: str) -> tuple[int, str | int]:
+        return (0, int(k)) if k.isdigit() else (1, k)
+
+    for gid in sorted(groups.keys(), key=sort_key):
+        info = groups[gid]
+        if not isinstance(info, dict):
+            rows.append([str(gid), str(info), "-", "-", "-"])
+            continue
+
+        name = str(info.get("name", "-"))
+        gtype = str(info.get("type", "-"))
+        lights_list = info.get("lights", [])
+        lights_str = ", ".join(str(x) for x in lights_list) if isinstance(lights_list, list) and lights_list else "-"
+
+        state = info.get("state", {}) if isinstance(info.get("state"), dict) else {}
+        action = info.get("action", {}) if isinstance(info.get("action"), dict) else {}
+
+        if state.get("all_on") is True:
+            state_str = "ALL ON"
+        elif state.get("any_on") is True:
+            state_str = "ANY ON"
+        elif action.get("on") is True:
+            state_str = "ON"
+        elif action.get("on") is False or state.get("all_on") is False:
+            state_str = "ALL OFF"
+        else:
+            state_str = "-"
+
+        rows.append([str(gid), name, gtype, lights_str, state_str])
+
+    return format_table(headers, rows, title="Groups & Rooms")
+
+
+def _format_scenes_table(scenes: dict[str, Any]) -> str:
+    headers = ["ID", "Scene Name", "Type", "Group", "Lights"]
+    rows: list[list[str]] = []
+
+    for sid in sorted(scenes.keys()):
+        info = scenes[sid]
+        if not isinstance(info, dict):
+            rows.append([str(sid), str(info), "-", "-", "-"])
+            continue
+
+        name = str(info.get("name", "-"))
+        stype = str(info.get("type", "-"))
+        group = str(info.get("group", "-"))
+        lights_list = info.get("lights", [])
+        lights_str = ", ".join(str(x) for x in lights_list) if isinstance(lights_list, list) and lights_list else "-"
+
+        rows.append([str(sid), name, stype, group, lights_str])
+
+    return format_table(headers, rows, title="Scenes")
+
+
+def _format_sensors_table(sensors: dict[str, Any]) -> str:
+    headers = ["ID", "Sensor Name", "Type", "Model ID"]
+    rows: list[list[str]] = []
+
+    def sort_key(k: str) -> tuple[int, str | int]:
+        return (0, int(k)) if k.isdigit() else (1, k)
+
+    for sid in sorted(sensors.keys(), key=sort_key):
+        info = sensors[sid]
+        if not isinstance(info, dict):
+            rows.append([str(sid), str(info), "-", "-"])
+            continue
+
+        name = str(info.get("name", "-"))
+        stype = str(info.get("type", "-"))
+        modelid = str(info.get("modelid", "-"))
+        rows.append([str(sid), name, stype, modelid])
+
+    return format_table(headers, rows, title="Sensors")
+
+
+def format_bridge_state(data: Any) -> str:
+    """Format the Hue bridge configuration and devices into a readable grid/table layout."""
+    if not data:
+        return format_table(["Property", "Value"], [["Status", "No configuration data returned."]], title="Bridge State")
+
+    if not isinstance(data, dict):
+        if isinstance(data, list):
+            rows = [[str(i), json.dumps(item) if isinstance(item, (dict, list)) else str(item)] for i, item in enumerate(data)]
+            return format_table(["Index", "Value"], rows, title="Bridge State")
+        return format_table(["Property", "Value"], [["Value", str(data)]], title="Bridge State")
+
+    sections: list[str] = []
+
+    if "config" in data and isinstance(data["config"], dict):
+        cfg_tbl = _format_bridge_config_table(data["config"])
+        if cfg_tbl:
+            sections.append(cfg_tbl)
+
+    if "lights" in data and isinstance(data["lights"], dict):
+        lights_tbl = _format_lights_table(data["lights"])
+        if lights_tbl:
+            sections.append(lights_tbl)
+
+    if "groups" in data and isinstance(data["groups"], dict) and data["groups"]:
+        groups_tbl = _format_groups_table(data["groups"])
+        if groups_tbl:
+            sections.append(groups_tbl)
+
+    if "scenes" in data and isinstance(data["scenes"], dict) and data["scenes"]:
+        scenes_tbl = _format_scenes_table(data["scenes"])
+        if scenes_tbl:
+            sections.append(scenes_tbl)
+
+    if "sensors" in data and isinstance(data["sensors"], dict) and data["sensors"]:
+        sensors_tbl = _format_sensors_table(data["sensors"])
+        if sensors_tbl:
+            sections.append(sensors_tbl)
+
+    if not sections:
+        is_lights_like = all(isinstance(v, dict) and ("name" in v or "state" in v) for v in data.values()) if data else False
+        if is_lights_like:
+            return _format_lights_table(data)
+
+        rows = []
+        for k, v in data.items():
+            val_str = json.dumps(v, indent=2) if isinstance(v, (dict, list)) else str(v)
+            rows.append([str(k), val_str])
+        return format_table(["Property", "Value"], rows, title="Bridge Configuration")
+
+    return "\n\n".join(sections)
+
+
 # --- Hue light helpers (no network at import; functions only) ---
 
 def _endpoint(base_url: str, path: str) -> str:
@@ -974,8 +1232,8 @@ def main() -> int:
 
     try:
         data = fetch_bridge_state(base_url, timeout=timeout)
-        pretty = json.dumps(data, indent=4)
-        logger.info("%s", pretty)
+        formatted = format_bridge_state(data)
+        logger.info("\n%s", formatted)
         return 0
     except requests.exceptions.RequestException as e:
         logger.error("Network error talking to Hue Bridge at %s: %s", bridge_ip, e)
