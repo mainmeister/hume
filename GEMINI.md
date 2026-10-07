@@ -13,7 +13,7 @@ The project is designed to be robust and testable, with a clear separation betwe
 
 ## Core Commands and Usage
 
-The main entrypoint is `main.py`. It can be executed using `uv run python main.py`.
+The main entrypoint is `hume.py`. It can be executed using `uv run python hume.py`.
 
 ### Prerequisites
 
@@ -26,7 +26,7 @@ To fetch and display the Hue bridge's configuration without starting the mood li
 
 **Command:**
 ```bash
-uv run python main.py --list
+uv run python hume.py --list
 ```
 
 This will print a JSON object with the bridge's state and then exit.
@@ -35,13 +35,13 @@ This will print a JSON object with the bridge's state and then exit.
 
 - **Display running daemon PIDs**:
   ```bash
-  uv run python main.py --show-daemons
-  # or: uv run python main.py -P
+  uv run python hume.py --show-daemons
+  # or: uv run python hume.py -P
   ```
 - **List running daemons and kill interactively by index**:
   ```bash
-  uv run python main.py --kill-daemon
-  # or: uv run python main.py -k
+  uv run python hume.py --kill-daemon
+  # or: uv run python hume.py -k
   ```
 
 ### Running the Mood Lighting Application
@@ -50,7 +50,7 @@ To start the interactive mood lighting application, run the script without the `
 
 **Command:**
 ```bash
-uv run python main.py
+uv run python hume.py
 ```
 
 This will:
@@ -80,7 +80,7 @@ The bulbs to be used for mood lighting are selected with the following precedenc
 
 ### Programmatic Control
 
-The `main.py` script also provides functions for programmatic control of the mood lighting:
+The `hume.py` script also provides functions for programmatic control of the mood lighting:
 
 - `start_mood_thread(bulb_name: str, stop_event: threading.Event | None = None) -> threading.Thread`: Starts a mood lighting thread for a specific bulb.
 - `mood(bulb_name: str, *, stop_event: Optional["threading.Event"] = None, restore_on_exit: bool = True)`: The target function for the mood lighting thread.
@@ -99,6 +99,6 @@ This allows for more advanced integrations where the mood lighting can be contro
 As a Gemini agent, you can:
 
 - **Read and understand the code**: The code is well-documented and follows modern Python best practices.
-- **Execute commands**: You can use the `run_shell_command` tool to execute the `uv run python main.py` command with different arguments.
+- **Execute commands**: You can use the `run_shell_command` tool to execute the `uv run python hume.py` command with different arguments.
 - **Modify the code**: You can use the `replace` or `write_file` tools to modify the code, for example, to change the default configuration or add new features.
 - **Run tests**: You can run the test suite to verify that your changes have not introduced any regressions.

@@ -3,12 +3,12 @@
 A logically ordered, actionable plan to evolve the "hume" project from a single-script prototype to a minimal, testable Hue control utility. Check items off as you complete them.
 
 1. [ ] Establish project basics
-   - [ ] Add a README with quickstart, environment variables, and basic usage (uv sync, uv run python main.py).
+   - [ ] Add a README with quickstart, environment variables, and basic usage (uv sync, uv run python hume.py).
    - [ ] Document required environment variables: HUE_USER_ID (required), HUE_BRIDGE_IP (optional; default to current hard-coded IP until refactor).
    - [ ] Add a simple CONTRIBUTING.md describing development flow (uv, tests, style).
 
 2. [ ] Refactor runtime side-effects into a proper entrypoint
-   - [ ] Move import-time logic in main.py into functions and a main() entrypoint.
+   - [ ] Move import-time logic in hume.py into functions and a main() entrypoint.
    - [ ] Protect runtime behavior with if __name__ == "__main__": to avoid side effects on import.
 
 3. [ ] Improve configuration handling
@@ -56,7 +56,7 @@ A logically ordered, actionable plan to evolve the "hume" project from a single-
     - [ ] Ensure all runtime deps are declared in pyproject and uv.lock kept up to date (uv sync updates lock).
 
 13. [ ] Packaging and structure
-    - [ ] Consider moving logic into a package (e.g., hume/ with __init__.py) while keeping main.py as thin entrypoint.
+    - [ ] Consider moving logic into a package (e.g., hume/ with __init__.py) while keeping hume.py as thin entrypoint.
     - [ ] Prepare for future CLI packaging (optional pyproject [project.scripts] entry).
 
 14. [ ] Observability and UX

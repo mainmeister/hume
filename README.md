@@ -75,7 +75,7 @@ The codebase is built with zero import-time network side-effects, explicit timeo
 
 ## Configuration & Environment Variables
 
-Configuration is loaded dynamically at runtime via `main.load_config()` with fallback defaults:
+Configuration is loaded dynamically at runtime via `hume.load_config()` with fallback defaults:
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -94,12 +94,12 @@ Configuration is loaded dynamically at runtime via `main.load_config()` with fal
 
 ## Usage & CLI Options
 
-The primary entry point is `main.py`.
+The primary entry point is `hume.py`.
 
 ### CLI Flags
 
 ```text
-Usage: python main.py [options]
+Usage: python hume.py [options]
 
 Options:
   -h, --help                  Show help message and exit
@@ -119,40 +119,40 @@ Options:
 - **Fetch bridge state and start interactive mood lighting**:
   ```bash
   export HUE_USER_ID="<your-user-id>"
-  uv run python main.py
+  uv run python hume.py
   ```
 
 - **Run in non-interactive daemon mode (forks to background and outputs PID/task ID)**:
   ```bash
   export HUE_USER_ID="<your-user-id>"
-  uv run python main.py -p
-  # or: uv run python main.py --daemon
+  uv run python hume.py -p
+  # or: uv run python hume.py --daemon
   ```
 
 - **Display all currently running daemon PIDs**:
   ```bash
-  uv run python main.py --show-daemons
-  # or: uv run python main.py -P
-  # or: uv run python main.py --pids
+  uv run python hume.py --show-daemons
+  # or: uv run python hume.py -P
+  # or: uv run python hume.py --pids
   ```
 
 - **List running daemons and interactively select one to kill**:
   ```bash
-  uv run python main.py --kill-daemon
-  # or: uv run python main.py -k
-  # or: uv run python main.py --kill
+  uv run python hume.py --kill-daemon
+  # or: uv run python hume.py -k
+  # or: uv run python hume.py --kill
   ```
 
 - **List bridge state only (no mood lighting started)**:
   ```bash
   export HUE_USER_ID="<your-user-id>"
-  uv run python main.py --list
+  uv run python hume.py --list
   ```
 
 - **Target specific bulbs with custom transition limits**:
   ```bash
   export HUE_USER_ID="<your-user-id>"
-  uv run python main.py --bulbs "Living Room,Bedroom" --mood-max-seconds 15.0
+  uv run python hume.py --bulbs "Living Room,Bedroom" --mood-max-seconds 15.0
   ```
 
 - **Debug logging and custom bridge IP**:
@@ -160,28 +160,28 @@ Options:
   export HUE_USER_ID="<your-user-id>"
   export HUE_BRIDGE_IP="192.168.1.50"
   export LOG_LEVEL="DEBUG"
-  uv run python main.py
+  uv run python hume.py
   ```
 
 ### Programmatic Usage
 
-You can import `main` into your own scripts without triggering network operations on import:
+You can import `hume` into your own scripts without triggering network operations on import:
 
 ```python
 import os
 import threading
 import time
-import main
+import hume
 
 os.environ["HUE_USER_ID"] = "<your-user-id>"
 os.environ["HUE_BRIDGE_IP"] = "192.168.2.19"
-main.setup_logging("INFO")
+hume.setup_logging("INFO")
 
 # Create a stop event for cooperative shutdown
 stop_event = threading.Event()
 
 # Start background mood thread for a specific light
-thread = main.start_mood_thread("Living Room", stop_event=stop_event)
+thread = hume.start_mood_thread("Living Room", stop_event=stop_event)
 
 try:
     # Let mood loop run for 30 seconds
@@ -198,7 +198,7 @@ finally:
 
 ### How It Works
 
-For each targeted bulb, `main.mood()` executes an asynchronous loop in a dedicated daemon thread:
+For each targeted bulb, `hume.mood()` executes an asynchronous loop in a dedicated daemon thread:
 
 1. **Discovery & Validation**: Looks up the bulb's light ID by name.
 2. **Initial State Capture**: Records the current on/off, brightness (`bri`), hue (`hue`), and saturation (`sat`) state for restoration on exit.
@@ -247,7 +247,7 @@ INTEGRATION=1 HUE_USER_ID="<your-user-id>" HUE_BRIDGE_IP="192.168.2.19" uv run p
 
 ```text
 hume/
-├── main.py                     # Application entry point, CLI parser, Hue API and mood lighting logic
+├── hume.py                     # Application entry point, CLI parser, Hue API and mood lighting logic
 ├── pyproject.toml              # Project metadata, Python version requirement, and dependencies
 ├── uv.lock                     # Locked dependency graph
 ├── CONTRIBUTING.md             # Contribution guidelines and coding conventions
@@ -278,7 +278,7 @@ hume/
 - **Connection timeouts or network errors**:
   Verify your Hue Bridge IP address (`HUE_BRIDGE_IP`) and ensure your device is on the same local subnet. Adjust `REQUEST_TIMEOUT` if your bridge is on a slow network.
 - **Bulb not found**:
-  Verify the exact name of your light as registered in the Philips Hue app. Use `uv run python main.py --list` to inspect all light names currently discovered on the bridge.
+  Verify the exact name of your light as registered in the Philips Hue app. Use `uv run python hume.py --list` to inspect all light names currently discovered on the bridge.
 - **Verbose logs**:
   Set `export LOG_LEVEL=DEBUG` for detailed logging of configuration, endpoints, and step transitions.
 

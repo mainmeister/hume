@@ -156,9 +156,9 @@ def _is_hume_daemon_cmdline(args: list[str], pid: int | None = None) -> bool:
         except (OSError, IOError, PermissionError):
             pass
 
-    # 3. Direct relative main.py invocation
+    # 3. Direct relative hume.py or main.py invocation
     for arg in args:
-        if arg in ("main.py", "./main.py"):
+        if arg in ("hume.py", "./hume.py", "main.py", "./main.py"):
             return True
 
     return False
@@ -993,7 +993,7 @@ def cli_entrypoint(argv: list[str] | None = None) -> int:
     # Help: show usage and exit without performing any network I/O or starting mood.
     if any(arg in ("-h", "--help") for arg in argv):
         print(
-            """Usage: python main.py [options]
+            """Usage: python hume.py [options]
 
 Options:
   -h, --help                  Show this help message and exit

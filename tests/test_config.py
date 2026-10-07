@@ -2,13 +2,13 @@ import os
 import unittest
 from unittest.mock import patch
 
-import main
+import hume
 
 
 class TestConfig(unittest.TestCase):
     def test_defaults_when_env_missing(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            cfg = main.load_config()
+            cfg = hume.load_config()
             self.assertIsNone(cfg["user_id"])  # not required at import
             self.assertEqual(cfg["bridge_ip"], "192.168.2.19")
             self.assertEqual(cfg["log_level"], "INFO")
@@ -25,7 +25,7 @@ class TestConfig(unittest.TestCase):
             },
             clear=True,
         ):
-            cfg = main.load_config()
+            cfg = hume.load_config()
             self.assertEqual(cfg["user_id"], "abc12345")
             self.assertEqual(cfg["bridge_ip"], "10.0.0.10")
             self.assertEqual(cfg["log_level"], "DEBUG")
@@ -33,7 +33,7 @@ class TestConfig(unittest.TestCase):
 
     def test_invalid_timeout_falls_back(self) -> None:
         with patch.dict(os.environ, {"REQUEST_TIMEOUT": "abc"}, clear=True):
-            cfg = main.load_config()
+            cfg = hume.load_config()
             self.assertEqual(cfg["timeout"], 5.0)
 
 

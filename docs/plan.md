@@ -14,12 +14,12 @@ Rationale:
 - Import-time side effects (env access, HTTP calls) break testability and tooling (linters, IDE indexers) and violate the guideline to avoid network I/O on import.
 
 Plan:
-- Move all import-time logic in main.py into functions.
+- Move all import-time logic in hume.py into functions.
 - Provide a main() entrypoint that orchestrates configuration, URL building, fetch, and formatting.
 - Guard runtime with `if __name__ == "__main__": main()`.
 
 Acceptance:
-- `import main` performs no network calls and does not require env variables; `uv run python main.py` executes runtime path.
+- `import hume` performs no network calls and does not require env variables; `uv run python hume.py` executes runtime path.
 
 ## 2) Configuration Management
 
@@ -101,7 +101,7 @@ Plan:
 - Flags: `--bridge-ip`, `--timeout` override env.
 
 Acceptance:
-- `uv run python main.py state` prints summarized state or pretty JSON; respects overrides.
+- `uv run python hume.py state` prints summarized state or pretty JSON; respects overrides.
 
 ## 8) Code Quality and Typing
 
@@ -121,7 +121,7 @@ Rationale:
 - Keep runtime deps minimal; avoid unused imports and keep lock consistent.
 
 Plan:
-- Remove unused `huesdk.Hue` import from main.py unless used.
+- Remove unused `huesdk.Hue` import from hume.py unless used.
 - Ensure pyproject declares all runtime deps; use `uv sync` to update uv.lock when needed.
 
 Acceptance:
@@ -133,11 +133,11 @@ Rationale:
 - A small package layout prepares for growth without over-engineering.
 
 Plan:
-- Optionally introduce `hume/` package for core logic while keeping main.py as a thin CLI entrypoint.
+- Optionally introduce `hume/` package for core logic while keeping hume.py as a thin CLI entrypoint.
 - Consider future `pyproject [project.scripts]` entry for CLI after stabilization.
 
 Acceptance:
-- Import paths remain simple; main.py stays minimal.
+- Import paths remain simple; hume.py stays minimal.
 
 ## 11) Observability and UX
 

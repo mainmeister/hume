@@ -32,7 +32,7 @@ export HUE_BRIDGE_IP="192.168.2.19"
 export LOG_LEVEL="INFO"
 export REQUEST_TIMEOUT="5"
 
-uv run python main.py
+uv run python hume.py
 ```
 
 ## Testing

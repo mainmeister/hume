@@ -3,7 +3,7 @@ import unittest
 
 import requests
 
-import main
+import hume
 
 
 @unittest.skipUnless(os.getenv("INTEGRATION") == "1", "requires integration env")
@@ -15,9 +15,9 @@ class TestIntegration(unittest.TestCase):
         if not user_id:
             self.fail("HUE_USER_ID must be set for integration test")
 
-        base_url = main.build_base_url(user_id, bridge_ip)
+        base_url = hume.build_base_url(user_id, bridge_ip)
         try:
-            data = main.fetch_bridge_state(base_url, timeout=timeout)
+            data = hume.fetch_bridge_state(base_url, timeout=timeout)
         except requests.exceptions.RequestException as e:
             self.fail(f"Network error during integration test: {e}")
         self.assertIsInstance(data, (dict, list))
