@@ -296,5 +296,4 @@ hume/
 
 ## License
 
-<!-- TODO: Specify project license (e.g., MIT, Apache-2.0, or proprietary) -->
-This project is currently unlicensed. Please add a `LICENSE` file before distributing publicly.
+This project is licensed under the GNU General Public License v3.0 (GPLv3) - see the [LICENSE](LICENSE) file for details.

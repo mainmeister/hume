@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2026-10-07
 
 ### Added
+- GNU General Public License v3.0 (`LICENSE`) added to repository and configured in `pyproject.toml` and documentation.
 - CLI options (`-a`, `--all`) to target all discovered "Extended color light" bulbs on the Hue bridge for mood lighting.
 - CLI options (`--show-daemons`, `--pids`, `-P`) to display all currently running hume daemon PIDs.
 - CLI options (`--kill-daemon`, `--kill`, `-k`) to list running daemon PIDs and interactively prompt the user to enter an index number to terminate a daemon.
