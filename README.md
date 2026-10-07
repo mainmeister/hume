@@ -30,7 +30,7 @@
 
 `hume` provides a clean, testable interface to:
 1. **Bridge State Inspection**: Fetch and format root configuration and light states from a local Philips Hue Bridge.
-2. **Dynamic Mood Lighting**: Run multithreaded, randomized color and brightness transitions across selected bulbs (defaulting to all discovered "Extended color light" devices).
+2. **Dynamic Mood Lighting**: Run multithreaded, randomized color and brightness transitions across selected bulbs (specified via `--bulbs` / `-b`, `HUE_MOOD_BULBS`, or targeting all color bulbs via `--all` / `-a`).
 3. **Safe Teardown**: Automatically preserve initial bulb states and restore them upon cooperative shutdown via `ESC`, `Ctrl-C`, or a `threading.Event`.
 
 The codebase is built with zero import-time network side-effects, explicit timeouts, and robust error handling.
@@ -84,7 +84,7 @@ Configuration is loaded dynamically at runtime via `hume.load_config()` with fal
 | `LOG_LEVEL` | No | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
 | `REQUEST_TIMEOUT` | No | `5.0` | Timeout in seconds for HTTP requests to prevent network hangs. |
 | `HUE_MOOD_MAX_SECONDS` | No | `30.0` | Upper bound in seconds for random transition durations (clamped to min 0.5s). |
-| `HUE_MOOD_BULBS` | No | Discovered color bulbs | Comma-separated list of bulb names to target for mood lighting. |
+| `HUE_MOOD_BULBS` | No | None (must specify bulbs or use `--all`/`-a`) | Comma-separated list of bulb names to target for mood lighting. |
 | `HUE_DAEMON` | No | `0` | Set to `1` or `true` to run mood lighting in non-interactive daemon mode. |
 | `INTEGRATION` | No | `0` | Set to `1` to run live-hardware integration tests against a reachable bridge. |
 
@@ -104,6 +104,7 @@ Usage: python hume.py [options]
 Options:
   -h, --help                  Show help message and exit
   -l, --list                  Fetch and display Hue bridge configuration, then exit
+  -a, --all                   Use all discovered color bulbs for mood lighting
   -d, -p, --daemon            Run in non-interactive daemon mode (wait for SIGTERM/SIGINT)
   -P, --show-daemons, --pids  Display all currently running daemon PIDs and exit
   -k, --kill, --kill-daemon   List running daemon PIDs and prompt to kill one by index
@@ -116,17 +117,24 @@ Options:
 
 ### Example Commands
 
-- **Fetch bridge state and start interactive mood lighting**:
+- **Start interactive mood lighting across all bulbs**:
   ```bash
   export HUE_USER_ID="<your-user-id>"
-  uv run python hume.py
+  uv run python hume.py --all
+  # or: uv run python hume.py -a
   ```
 
-- **Run in non-interactive daemon mode (forks to background and outputs PID/task ID)**:
+- **Target specific bulbs with custom transition limits**:
   ```bash
   export HUE_USER_ID="<your-user-id>"
-  uv run python hume.py -p
-  # or: uv run python hume.py --daemon
+  uv run python hume.py --bulbs "Living Room,Bedroom" --mood-max-seconds 15.0
+  ```
+
+- **Run in non-interactive daemon mode across all bulbs**:
+  ```bash
+  export HUE_USER_ID="<your-user-id>"
+  uv run python hume.py -a -p
+  # or: uv run python hume.py --all --daemon
   ```
 
 - **Display all currently running daemon PIDs**:

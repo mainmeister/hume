@@ -1004,65 +1004,89 @@ def _get_cli_bulb_names(argv: list[str] | None = None) -> list[str] | None:
     return None
 
 
+def _is_all_bulbs_flag(argv: list[str] | None = None) -> bool:
+    """Check if --all or -a flag is passed on CLI."""
+    if argv is None:
+        argv = sys.argv[1:] if isinstance(sys.argv, list) else []
+    return any(arg in ("-a", "--all") for arg in argv)
+
+
 def _get_env_bulb_names() -> list[str] | None:
     env_val = os.getenv("HUE_MOOD_BULBS")
     names = _parse_csv_names(env_val)
     return names or None
 
 
-def get_mood_bulb_names(base_url: str, timeout: float = 5.0) -> list[str]:
+def get_mood_bulb_names(
+    base_url: str,
+    timeout: float = 5.0,
+    argv: list[str] | None = None,
+    use_all: bool | None = None,
+) -> list[str]:
     """Determine which bulb names to run mood on.
 
     Precedence:
     1) CLI (--bulbs/-b) if provided
-    2) Environment (HUE_MOOD_BULBS)
-    3) Default: bulbs of type "Extended color light" discovered from the bridge (via /lights)
+    2) CLI (--all/-a) or use_all=True: all bulbs of type "Extended color light" discovered from bridge
+    3) Environment (HUE_MOOD_BULBS)
+    4) Default: None (logs error; bulbs must be specified or --all/-a used)
     """
-    # 1) CLI
-    cli = _get_cli_bulb_names()
+    # 1) CLI specific bulbs
+    cli = _get_cli_bulb_names(argv)
     if cli:
         names = _unique_preserve_order([n for n in cli if n])
         logger.debug("Using bulb names from CLI: %s", ", ".join(names))
         return names
 
-    # 2) ENV
+    # 2) CLI --all / -a or use_all parameter
+    is_all = use_all if use_all is not None else _is_all_bulbs_flag(argv)
+    if is_all:
+        try:
+            lights = get_lights(base_url, timeout=timeout) or {}
+        except requests.exceptions.RequestException as e:
+            logger.error("Failed to list bulbs from Hue Bridge: %s", e)
+            return []
+
+        # Sort by numeric id for determinism
+        def _id_key(item: tuple[str, Any]) -> int:
+            try:
+                return int(item[0])
+            except Exception:
+                return 0
+
+        names: list[str] = []
+        for lid, info in sorted(lights.items(), key=_id_key):
+            try:
+                name = str(info.get("name", "")).strip()
+            except Exception:
+                name = ""
+            # Filter by type: only Extended color light
+            try:
+                ltype = str(info.get("type", "")).strip().lower()
+            except Exception:
+                ltype = ""
+            if name and ltype == "extended color light":
+                names.append(name)
+
+        names = _unique_preserve_order(names)
+        logger.debug(
+            "Discovered all bulbs for mood (Extended color light only): %s",
+            ", ".join(names) if names else "<none>",
+        )
+        return names
+
+    # 3) ENV
     env_names = _get_env_bulb_names()
     if env_names:
         names = _unique_preserve_order([n for n in env_names if n])
         logger.debug("Using bulb names from HUE_MOOD_BULBS: %s", ", ".join(names))
         return names
 
-    # 3) Default to bulbs of type "Extended color light" discovered from the bridge
-    try:
-        lights = get_lights(base_url, timeout=timeout) or {}
-    except requests.exceptions.RequestException as e:
-        logger.error("Failed to list bulbs from Hue Bridge: %s", e)
-        return []
-
-    # Sort by numeric id for determinism
-    def _id_key(item: tuple[str, Any]) -> int:
-        try:
-            return int(item[0])
-        except Exception:
-            return 0
-
-    names: list[str] = []
-    for lid, info in sorted(lights.items(), key=_id_key):
-        try:
-            name = str(info.get("name", "")).strip()
-        except Exception:
-            name = ""
-        # Filter by type: only Extended color light by default
-        try:
-            ltype = str(info.get("type", "")).strip().lower()
-        except Exception:
-            ltype = ""
-        if name and ltype == "extended color light":
-            names.append(name)
-
-    names = _unique_preserve_order(names)
-    logger.debug("Discovered bulbs for mood (Extended color light only): %s", ", ".join(names) if names else "<none>")
-    return names
+    # 4) If neither CLI bulbs, --all, nor env bulbs are provided, treat as error
+    logger.error(
+        "No bulbs specified. Please specify bulbs with --bulbs / -b, HUE_MOOD_BULBS, or use --all / -a to target all bulbs."
+    )
+    return []
 
 
 def _wait_for_escape_or_sigint() -> None:
@@ -1148,19 +1172,21 @@ def _wait_for_signal_or_stop_event(stop_event: threading.Event) -> None:
 
 
 def run_mood_application(
-    daemon: bool | None = None, stop_event: threading.Event | None = None
+    daemon: bool | None = None,
+    stop_event: threading.Event | None = None,
+    argv: list[str] | None = None,
+    use_all: bool | None = None,
 ) -> None:
     """Start mood threads for selected bulbs and wait for stop.
 
     In interactive mode (default), waits for ESC key or Ctrl-C.
     In daemon mode (daemon=True or via CLI/env), runs non-interactively and waits for SIGTERM/SIGINT.
 
-    Selection defaults to all bulbs discovered on the bridge. Override via:
-    - CLI: --bulbs "Name1,Name2" (or -b "Name1,Name2")
-    - Env: HUE_MOOD_BULBS="Name1,Name2"
+    Bulbs must be specified via CLI (--bulbs/-b), environment (HUE_MOOD_BULBS),
+    or targeted in full with --all / -a (or use_all=True).
     """
     if daemon is None:
-        daemon = is_daemon_mode()
+        daemon = is_daemon_mode(argv)
 
     cfg = load_config()
     user_id = str(cfg.get("user_id") or "")
@@ -1173,7 +1199,7 @@ def run_mood_application(
 
     base_url = build_base_url(user_id, bridge_ip)
 
-    bulbs = get_mood_bulb_names(base_url, timeout=timeout)
+    bulbs = get_mood_bulb_names(base_url, timeout=timeout, argv=argv, use_all=use_all)
     if not bulbs:
         logger.warning("No bulbs available or specified; nothing to do.")
         return
@@ -1208,7 +1234,7 @@ def run_mood_application(
             _unregister_daemon_pid(os.getpid())
 
 
-def main() -> int:
+def main(show_config: bool = False) -> int:
     cfg = load_config()
 
     # Configure logging early
@@ -1228,12 +1254,16 @@ def main() -> int:
     logger.debug("Effective configuration: bridge_ip=%s, user_id=%s, timeout=%s", bridge_ip, redacted_user, timeout)
 
     base_url = build_base_url(user_id, bridge_ip)
-    logger.info("Fetching Hue bridge state from http://%s/... (base path)", bridge_ip)
+    if show_config:
+        logger.info("Fetching Hue bridge state from http://%s/... (base path)", bridge_ip)
+    else:
+        logger.debug("Checking Hue bridge connection at http://%s/...", bridge_ip)
 
     try:
         data = fetch_bridge_state(base_url, timeout=timeout)
-        formatted = format_bridge_state(data)
-        logger.info("\n%s", formatted)
+        if show_config:
+            formatted = format_bridge_state(data)
+            logger.info("\n%s", formatted)
         return 0
     except requests.exceptions.RequestException as e:
         logger.error("Network error talking to Hue Bridge at %s: %s", bridge_ip, e)
@@ -1256,6 +1286,7 @@ def cli_entrypoint(argv: list[str] | None = None) -> int:
 Options:
   -h, --help                  Show this help message and exit
   -l, --list                  Fetch and display Hue bridge configuration, then exit
+  -a, --all                   Use all discovered color bulbs for mood lighting
   -d, -p, --daemon            Run in non-interactive daemon mode (wait for SIGTERM/SIGINT)
   -P, --show-daemons, --pids  Display all currently running daemon PIDs and exit
   -k, --kill, --kill-daemon   List running daemon PIDs and prompt to kill one by index
@@ -1295,11 +1326,23 @@ Environment:
     # Hue bridge configuration and exit without starting the mood application.
     list_only = any(arg in ("-l", "--list") for arg in argv)
 
-    rc = main()
+    if not list_only:
+        cli_bulbs = _get_cli_bulb_names(argv)
+        all_bulbs = _is_all_bulbs_flag(argv)
+        env_bulbs = _get_env_bulb_names()
+        if not cli_bulbs and not all_bulbs and not env_bulbs:
+            cfg = load_config()
+            setup_logging(cfg.get("log_level"))
+            logger.error(
+                "No bulbs specified. Please specify bulbs with --bulbs / -b or use --all / -a to target all bulbs."
+            )
+            return 1
+
+    rc = main(show_config=list_only)
     if rc == 0 and not list_only:
         # Start mood application (interactive with ESC/Ctrl-C or daemon mode with signals)
         daemon_mode = is_daemon_mode(argv)
-        run_mood_application(daemon=daemon_mode)
+        run_mood_application(daemon=daemon_mode, argv=argv)
     return rc
 
 

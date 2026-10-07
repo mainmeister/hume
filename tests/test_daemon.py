@@ -15,7 +15,13 @@ class TestDaemonMode(unittest.TestCase):
     def setUp(self) -> None:
         importlib.reload(hume)
 
-    def _setup_env(self, user: str = "user1", ip: str = "1.2.3.4", daemon: str | None = None):
+    def _setup_env(
+        self,
+        user: str = "user1",
+        ip: str = "1.2.3.4",
+        daemon: str | None = None,
+        bulbs: str | None = "TestBulb",
+    ):
         env = {
             "HUE_USER_ID": user,
             "HUE_BRIDGE_IP": ip,
@@ -23,6 +29,8 @@ class TestDaemonMode(unittest.TestCase):
         }
         if daemon is not None:
             env["HUE_DAEMON"] = daemon
+        if bulbs is not None:
+            env["HUE_MOOD_BULBS"] = bulbs
         return patch.dict(os.environ, env, clear=True)
 
     def test_is_daemon_mode_cli_flags(self) -> None:
@@ -171,11 +179,11 @@ class TestDaemonMode(unittest.TestCase):
 
     @patch("requests.get")
     def test_run_mood_application_no_bulbs(self, mock_get) -> None:
-        with self._setup_env(daemon="1"):
+        with self._setup_env(daemon="1", bulbs=None):
             base = "http://1.2.3.4/api/user1"
             mock_get.return_value = MagicMock(json=lambda: {})  # No lights
             with patch("hume.start_mood_thread") as mock_start:
-                hume.run_mood_application(daemon=True)
+                hume.run_mood_application(daemon=True, argv=["--all"])
                 mock_start.assert_not_called()
 
     @patch("hume.fork_daemon_process")
@@ -468,20 +476,57 @@ class TestDaemonMode(unittest.TestCase):
             help_text = mock_print.call_args[0][0]
             self.assertIn("--show-daemons", help_text)
             self.assertIn("--kill-daemon", help_text)
+            self.assertIn("--all", help_text)
+            self.assertIn("-a", help_text)
 
     def test_cli_entrypoint_list_only(self) -> None:
         with patch("hume.main", return_value=0) as mock_main, patch("hume.run_mood_application") as mock_mood:
             rc = hume.cli_entrypoint(["--list"])
             self.assertEqual(rc, 0)
-            mock_main.assert_called_once()
+            mock_main.assert_called_once_with(show_config=True)
             mock_mood.assert_not_called()
 
-    def test_cli_entrypoint_default_mood(self) -> None:
         with patch("hume.main", return_value=0) as mock_main, patch("hume.run_mood_application") as mock_mood:
+            rc = hume.cli_entrypoint(["-l"])
+            self.assertEqual(rc, 0)
+            mock_main.assert_called_once_with(show_config=True)
+            mock_mood.assert_not_called()
+
+    def test_cli_entrypoint_no_bulbs_returns_error(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch("hume.main") as mock_main, patch("hume.run_mood_application") as mock_mood:
+            rc = hume.cli_entrypoint([])
+            self.assertEqual(rc, 1)
+            mock_main.assert_not_called()
+            mock_mood.assert_not_called()
+
+    def test_cli_entrypoint_all_flag(self) -> None:
+        with patch("hume.main", return_value=0) as mock_main, patch("hume.run_mood_application") as mock_mood:
+            rc = hume.cli_entrypoint(["--all"])
+            self.assertEqual(rc, 0)
+            mock_main.assert_called_once_with(show_config=False)
+            mock_mood.assert_called_once_with(daemon=False, argv=["--all"])
+
+        with patch("hume.main", return_value=0) as mock_main, patch("hume.run_mood_application") as mock_mood:
+            rc = hume.cli_entrypoint(["-a"])
+            self.assertEqual(rc, 0)
+            mock_main.assert_called_once_with(show_config=False)
+            mock_mood.assert_called_once_with(daemon=False, argv=["-a"])
+
+    def test_cli_entrypoint_bulbs_flag(self) -> None:
+        with patch("hume.main", return_value=0) as mock_main, patch("hume.run_mood_application") as mock_mood:
+            rc = hume.cli_entrypoint(["--bulbs", "Living"])
+            self.assertEqual(rc, 0)
+            mock_main.assert_called_once_with(show_config=False)
+            mock_mood.assert_called_once_with(daemon=False, argv=["--bulbs", "Living"])
+
+    def test_cli_entrypoint_env_bulbs(self) -> None:
+        with patch.dict(os.environ, {"HUE_MOOD_BULBS": "Desk"}, clear=True), \
+             patch("hume.main", return_value=0) as mock_main, \
+             patch("hume.run_mood_application") as mock_mood:
             rc = hume.cli_entrypoint([])
             self.assertEqual(rc, 0)
-            mock_main.assert_called_once()
-            mock_mood.assert_called_once_with(daemon=False)
+            mock_main.assert_called_once_with(show_config=False)
+            mock_mood.assert_called_once_with(daemon=False, argv=[])
 
 
 if __name__ == "__main__":

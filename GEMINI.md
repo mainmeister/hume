@@ -46,16 +46,23 @@ This will print formatted ASCII tables/grids with the bridge configuration, disc
 
 ### Running the Mood Lighting Application
 
-To start the interactive mood lighting application, run the script without the `--list` flag.
+To start the interactive mood lighting application, run the script specifying the bulbs to target or passing `--all` / `-a` to target all color bulbs.
 
-**Command:**
+**Command (All Bulbs):**
 ```bash
-uv run python hume.py
+uv run python hume.py --all
+# or: uv run python hume.py -a
+```
+
+**Command (Specific Bulbs):**
+```bash
+uv run python hume.py --bulbs "Living Room,Kitchen"
+# or: uv run python hume.py -b "Living Room,Kitchen"
 ```
 
 This will:
-1.  First, print the bridge configuration.
-2.  Then, start the mood lighting on selected bulbs.
+1.  Check connection with the Hue bridge.
+2.  Start the mood lighting on selected bulbs.
 3.  The application will run until it is stopped by pressing `ESC` or `Ctrl-C`.
 
 ## Mood Lighting Control
@@ -67,8 +74,9 @@ The mood lighting feature runs in background threads, one for each selected bulb
 The bulbs to be used for mood lighting are selected with the following precedence:
 
 1.  **Command-line argument**: `--bulbs "Living Room,Kitchen"` or `-b "Living Room,Kitchen"`
-2.  **Environment variable**: `export HUE_MOOD_BULBS="Living Room,Kitchen"`
-3.  **Automatic discovery**: If neither of the above is provided, the application will discover all bulbs of type "Extended color light" on the bridge and use them.
+2.  **All bulbs flag**: `--all` or `-a` discovers all bulbs of type "Extended color light" on the bridge and uses them.
+3.  **Environment variable**: `export HUE_MOOD_BULBS="Living Room,Kitchen"`
+4.  **No selection**: If none of the above is provided, the application treats this as an error and exits without starting mood lighting.
 
 ### Behavior
 

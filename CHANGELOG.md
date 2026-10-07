@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2026-10-07
 
 ### Added
+- CLI options (`-a`, `--all`) to target all discovered "Extended color light" bulbs on the Hue bridge for mood lighting.
 - CLI options (`--show-daemons`, `--pids`, `-P`) to display all currently running hume daemon PIDs.
 - CLI options (`--kill-daemon`, `--kill`, `-k`) to list running daemon PIDs and interactively prompt the user to enter an index number to terminate a daemon.
 - Daemon mode support via `-d` / `--daemon` CLI flags and `HUE_DAEMON` environment variable for non-interactive continuous execution with graceful `SIGTERM`/`SIGINT` shutdown.
@@ -16,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Safe termination mechanism for mood lighting loops with initial bulb state restoration on ESC key press ([86906df](https://github.com/mainmeister/hume/commit/86906df)).
 
 ### Changed
+- Required explicit bulb selection (`--bulbs`/`-b`, `HUE_MOOD_BULBS`, or `--all`/`-a`); running without bulbs specified is now treated as an error instead of automatically defaulting to all bulbs.
+- Bridge configuration display restricted to explicit invocation via `-l` / `--list` CLI flags, keeping standard mood lighting startup output clean.
 - Display of bridge configuration, lights, groups, and devices formatted into clean, structured ASCII tables and grids instead of raw JSON.
 - Default bulb discovery to automatically filter for "Extended color light" bulbs when no bulb overrides are provided ([8953233](https://github.com/mainmeister/hume/commit/8953233)).
 - Interactive mood lighting launch flow to only start upon successful bridge initialization ([b05ff38](https://github.com/mainmeister/hume/commit/b05ff38)).
