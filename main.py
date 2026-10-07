@@ -19,7 +19,9 @@ import json
 import logging
 import os
 import random
+import signal
 import sys
+import threading
 import time
 from typing import Any, Dict, Optional
 
@@ -41,16 +43,46 @@ def _redact_user_id(user_id: str) -> str:
     return f"***{user_id[-4:]}" if len(user_id) > 4 else "***"
 
 
+def is_daemon_mode(argv: list[str] | None = None) -> bool:
+    """Check if daemon mode is enabled via CLI flags (-d, -p, --daemon) or HUE_DAEMON env var."""
+    if argv is None:
+        argv = sys.argv[1:] if isinstance(sys.argv, list) else []
+
+    if any(arg in ("-d", "-p", "--daemon") for arg in argv):
+        return True
+
+    env_val = os.getenv("HUE_DAEMON", "").strip().lower()
+    return env_val in ("1", "true", "yes", "y", "t", "on")
+
+
+def fork_daemon_process() -> int:
+    """Fork the current process into background, exit the parent, and display child PID/task ID.
+
+    Returns the PID of the running child process.
+    """
+    if hasattr(os, "fork"):
+        pid = os.fork()
+        if pid > 0:
+            # Parent process: exit immediately so the calling shell returns
+            sys.exit(0)
+
+    child_pid = os.getpid()
+    print(f"Daemon process started with PID: {child_pid}", flush=True)
+    logger.info("Daemon process running with PID: %s", child_pid)
+    return child_pid
+
+
 def load_config() -> Dict[str, Any]:
     """Load configuration from environment with defaults.
 
-    Returns a dict with keys: user_id (str|None), bridge_ip (str), log_level (str), timeout (float).
+    Returns a dict with keys: user_id (str|None), bridge_ip (str), log_level (str), timeout (float), daemon (bool).
     Note: user_id may be None; main() validates and handles errors with messaging.
     """
     user_id = os.getenv("HUE_USER_ID")
     bridge_ip = os.getenv("HUE_BRIDGE_IP", "192.168.1.2")
     log_level = os.getenv("LOG_LEVEL", "INFO")
     timeout_raw = os.getenv("REQUEST_TIMEOUT", "5.0")
+    daemon = is_daemon_mode()
     try:
         timeout = float(timeout_raw)
     except ValueError:
@@ -62,6 +94,7 @@ def load_config() -> Dict[str, Any]:
         "bridge_ip": bridge_ip,
         "log_level": log_level,
         "timeout": timeout,
+        "daemon": daemon,
     }
 
 
@@ -517,13 +550,54 @@ def _wait_for_escape_or_sigint() -> None:
         return
 
 
-def run_mood_application() -> None:
-    """Start mood threads for selected bulbs and wait for ESC/Ctrl-C to stop.
+def _wait_for_signal_or_stop_event(stop_event: threading.Event) -> None:
+    """Block until stop_event is set or SIGTERM/SIGINT is received."""
+    orig_handlers: dict[int, Any] = {}
+    signals_to_catch = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        signals_to_catch.append(signal.SIGHUP)
+
+    def _sig_handler(signum: int, frame: Any) -> None:
+        logger.info("Received signal %s; shutting down...", signum)
+        stop_event.set()
+
+    is_main_thread = threading.current_thread() is threading.main_thread()
+    if is_main_thread:
+        for sig in signals_to_catch:
+            try:
+                orig_handlers[sig] = signal.signal(sig, _sig_handler)
+            except (ValueError, OSError, AttributeError):
+                pass
+
+    try:
+        while not stop_event.is_set():
+            stop_event.wait(timeout=0.5)
+    except KeyboardInterrupt:
+        stop_event.set()
+    finally:
+        if is_main_thread:
+            for sig, handler in orig_handlers.items():
+                try:
+                    signal.signal(sig, handler)
+                except (ValueError, OSError, AttributeError):
+                    pass
+
+
+def run_mood_application(
+    daemon: bool | None = None, stop_event: threading.Event | None = None
+) -> None:
+    """Start mood threads for selected bulbs and wait for stop.
+
+    In interactive mode (default), waits for ESC key or Ctrl-C.
+    In daemon mode (daemon=True or via CLI/env), runs non-interactively and waits for SIGTERM/SIGINT.
 
     Selection defaults to all bulbs discovered on the bridge. Override via:
     - CLI: --bulbs "Name1,Name2" (or -b "Name1,Name2")
     - Env: HUE_MOOD_BULBS="Name1,Name2"
     """
+    if daemon is None:
+        daemon = is_daemon_mode()
+
     cfg = load_config()
     user_id = cfg.get("user_id")
     bridge_ip = cfg.get("bridge_ip")
@@ -540,14 +614,25 @@ def run_mood_application() -> None:
         logger.warning("No bulbs available or specified; nothing to do.")
         return
 
-    stop_event = threading.Event()
+    if daemon:
+        fork_daemon_process()
+
+    if stop_event is None:
+        stop_event = threading.Event()
+
     threads = []
     for name in bulbs:
         t = start_mood_thread(name, stop_event)
         threads.append(t)
     logger.info("Mood threads started for bulbs: %s", ", ".join(bulbs))
-    logger.info("Press ESC (or Ctrl-C) to stop and restore bulbs...")
-    _wait_for_escape_or_sigint()
+
+    if daemon:
+        logger.info("Running in daemon mode. Waiting for termination signal (SIGTERM/SIGINT) to stop...")
+        _wait_for_signal_or_stop_event(stop_event)
+    else:
+        logger.info("Press ESC (or Ctrl-C) to stop and restore bulbs...")
+        _wait_for_escape_or_sigint()
+
     logger.info("Stopping mood threads and restoring bulbs...")
     stop_event.set()
     # Join threads briefly; they restore on exit
@@ -600,6 +685,7 @@ if __name__ == "__main__":
 Options:
   -h, --help                  Show this help message and exit
   -l, --list                  Fetch and display Hue bridge configuration, then exit
+  -d, -p, --daemon            Run in non-interactive daemon mode (wait for SIGTERM/SIGINT)
   -M SEC, --mood-max-seconds SEC
                               Maximum transition duration for mood lighting
                               (default via HUE_MOOD_MAX_SECONDS)
@@ -613,6 +699,7 @@ Environment:
   REQUEST_TIMEOUT             Network timeout seconds (default 5.0)
   HUE_MOOD_MAX_SECONDS        Max transition seconds for mood lighting (default 30.0)
   HUE_MOOD_BULBS              Bulb names, comma-separated
+  HUE_DAEMON                  Enable daemon mode if set to 1/true
 """
         )
         sys.exit(0)
@@ -623,5 +710,6 @@ Environment:
 
     rc = main()
     if rc == 0 and not list_only:
-        # Start interactive mood application that can be stopped with ESC/Ctrl-C
-        run_mood_application()
+        # Start mood application (interactive with ESC/Ctrl-C or daemon mode with signals)
+        daemon_mode = is_daemon_mode()
+        run_mood_application(daemon=daemon_mode)

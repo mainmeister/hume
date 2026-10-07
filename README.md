@@ -1,157 +1,274 @@
 # hume
 
-Minimal Philips Hue control utility (work-in-progress).
+`hume` is a minimal, modular Python utility for interacting with a Philips Hue bridge and running dynamic, real-time mood lighting loops across Hue color bulbs.
 
-This project starts as a single-script prototype and evolves into a minimal, testable utility with proper configuration, logging, and tests.
+---
 
-## Quickstart
+## Table of Contents
 
-Prerequisites:
-- Python 3.12+
-- uv (dependency manager)
+- [Overview](#overview)
+- [Requirements & Tech Stack](#requirements--tech-stack)
+- [Installation & Setup](#installation--setup)
+- [Configuration & Environment Variables](#configuration--environment-variables)
+- [Usage & CLI Options](#usage--cli-options)
+  - [CLI Flags](#cli-flags)
+  - [Example Commands](#example-commands)
+  - [Programmatic Usage](#programmatic-usage)
+- [Mood Lighting Logic](#mood-lighting-logic)
+  - [How It Works](#how-it-works)
+  - [Graceful Shutdown & State Restoration](#graceful-shutdown--state-restoration)
+- [Testing](#testing)
+  - [Running Unit Tests](#running-unit-tests)
+  - [Running Integration Tests](#running-integration-tests)
+- [Project Structure](#project-structure)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
 
-Install uv:
-- Linux/macOS: `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- Windows (PowerShell): `iwr https://astral.sh/uv/install.ps1 -UseBasicParsing | iex`
+---
 
-Set up the environment and install locked dependencies:
+## Overview
 
-```bash
-uv sync
+`hume` provides a clean, testable interface to:
+1. **Bridge State Inspection**: Fetch and format root configuration and light states from a local Philips Hue Bridge.
+2. **Dynamic Mood Lighting**: Run multithreaded, randomized color and brightness transitions across selected bulbs (defaulting to all discovered "Extended color light" devices).
+3. **Safe Teardown**: Automatically preserve initial bulb states and restore them upon cooperative shutdown via `ESC`, `Ctrl-C`, or a `threading.Event`.
+
+The codebase is built with zero import-time network side-effects, explicit timeouts, and robust error handling.
+
+---
+
+## Requirements & Tech Stack
+
+- **Language**: Python `>=3.12`
+- **Package & Dependency Manager**: [`uv`](https://docs.astral.sh/uv/) (with locked dependencies in `uv.lock`)
+- **Key Dependencies**:
+  - `requests >= 2.32.4` (HTTP communication with Hue Bridge REST API)
+  - `huesdk >= 1.8`
+- **Testing**: Python standard library `unittest` (mocked HTTP layer, no live hardware required for unit tests)
+
+---
+
+## Installation & Setup
+
+1. **Install `uv`** (if not already installed):
+   - **Linux / macOS**:
+     ```bash
+     curl -LsSf https://astral.sh/uv/install.sh | sh
+     ```
+   - **Windows (PowerShell)**:
+     ```powershell
+     iwr https://astral.sh/uv/install.ps1 -UseBasicParsing | iex
+     ```
+
+2. **Clone the repository and sync dependencies**:
+   ```bash
+   git clone <repository-url>
+   cd hume
+   uv sync
+   ```
+
+3. **Managing Dependencies**:
+   - Add a dependency: `uv add <package>`
+   - Update lockfile: `uv lock`
+
+---
+
+## Configuration & Environment Variables
+
+Configuration is loaded dynamically at runtime via `main.load_config()` with fallback defaults:
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `HUE_USER_ID` | **Yes** (at runtime) | `None` | Authorized Hue Bridge API username/token. Never commit or log in full (auto-redacted in logs). |
+| `HUE_BRIDGE_IP` | No | `192.168.1.2` | IP address or hostname of the Philips Hue Bridge. |
+| `LOG_LEVEL` | No | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
+| `REQUEST_TIMEOUT` | No | `5.0` | Timeout in seconds for HTTP requests to prevent network hangs. |
+| `HUE_MOOD_MAX_SECONDS` | No | `30.0` | Upper bound in seconds for random transition durations (clamped to min 0.5s). |
+| `HUE_MOOD_BULBS` | No | Discovered color bulbs | Comma-separated list of bulb names to target for mood lighting. |
+| `HUE_DAEMON` | No | `0` | Set to `1` or `true` to run mood lighting in non-interactive daemon mode. |
+| `INTEGRATION` | No | `0` | Set to `1` to run live-hardware integration tests against a reachable bridge. |
+
+**Precedence Order**: CLI Options > Environment Variables > Bridge Defaults.
+
+---
+
+## Usage & CLI Options
+
+The primary entry point is `main.py`.
+
+### CLI Flags
+
+```text
+Usage: python main.py [options]
+
+Options:
+  -h, --help                  Show help message and exit
+  -l, --list                  Fetch and display Hue bridge configuration, then exit
+  -d, -p, --daemon            Run in non-interactive daemon mode (wait for SIGTERM/SIGINT)
+  -M SEC, --mood-max-seconds SEC
+                              Maximum transition duration for mood lighting
+                              (default via HUE_MOOD_MAX_SECONDS)
+  -b NAMES, --bulbs NAMES     Comma-separated bulb names for mood lighting
+                              (default via HUE_MOOD_BULBS)
 ```
 
-Run the script directly without a global install:
+### Example Commands
 
-```bash
-# Required at runtime
-export HUE_USER_ID="<your-registered-user-id>"
+- **Fetch bridge state and start interactive mood lighting**:
+  ```bash
+  export HUE_USER_ID="<your-user-id>"
+  uv run python main.py
+  ```
 
-# Optional (defaults to 192.168.1.2)
-export HUE_BRIDGE_IP="192.168.1.2"
+- **Run in non-interactive daemon mode (forks to background and outputs PID/task ID)**:
+  ```bash
+  export HUE_USER_ID="<your-user-id>"
+  uv run python main.py -p
+  # or: uv run python main.py --daemon
+  ```
 
-# Optional logging level (DEBUG, INFO, WARNING, ERROR)
-export LOG_LEVEL="INFO"
+- **List bridge state only (no mood lighting started)**:
+  ```bash
+  export HUE_USER_ID="<your-user-id>"
+  uv run python main.py --list
+  ```
 
-# Optional request timeout (seconds)
-export REQUEST_TIMEOUT="5"
+- **Target specific bulbs with custom transition limits**:
+  ```bash
+  export HUE_USER_ID="<your-user-id>"
+  uv run python main.py --bulbs "Living Room,Bedroom" --mood-max-seconds 15.0
+  ```
 
-uv run python main.py
+- **Debug logging and custom bridge IP**:
+  ```bash
+  export HUE_USER_ID="<your-user-id>"
+  export HUE_BRIDGE_IP="192.168.1.50"
+  export LOG_LEVEL="DEBUG"
+  uv run python main.py
+  ```
+
+### Programmatic Usage
+
+You can import `main` into your own scripts without triggering network operations on import:
+
+```python
+import os
+import threading
+import time
+import main
+
+os.environ["HUE_USER_ID"] = "<your-user-id>"
+os.environ["HUE_BRIDGE_IP"] = "192.168.1.2"
+main.setup_logging("INFO")
+
+# Create a stop event for cooperative shutdown
+stop_event = threading.Event()
+
+# Start background mood thread for a specific light
+thread = main.start_mood_thread("Living Room", stop_event=stop_event)
+
+try:
+    # Let mood loop run for 30 seconds
+    time.sleep(30)
+finally:
+    # Stop thread and restore initial bulb state
+    stop_event.set()
+    thread.join(timeout=10.0)
 ```
 
-Note: Network calls happen only when executed as a script (not at import). A timeout is always applied to prevent hangs when the bridge is unreachable.
+---
 
-When you run `python main.py`, it will first fetch and print the Hue bridge root state, then start the interactive mood lighting application. Press ESC (or Ctrl-C) to stop; bulbs will be restored to their original state.
+## Mood Lighting Logic
 
-To only display the Hue bridge configuration and exit without starting mood lighting, use the list flag:
+### How It Works
 
-- `uv run python main.py --list` (or `-l`)
+For each targeted bulb, `main.mood()` executes an asynchronous loop in a dedicated daemon thread:
 
-## Environment Variables
+1. **Discovery & Validation**: Looks up the bulb's light ID by name.
+2. **Initial State Capture**: Records the current on/off, brightness (`bri`), hue (`hue`), and saturation (`sat`) state for restoration on exit.
+3. **Power On**: If the bulb is currently off, turns it on.
+4. **Target Generation**: Randomly generates a new target hue (`0–65535`), saturation (`0–254`), and brightness (`1–254`).
+5. **Duration & Step Calculation**: Randomly picks a transition time between 0.5s and `mood_max_seconds` (default 30.0s), dividing the transition into discrete `0.1s` increments.
+6. **Smooth Transition**: Incrementally applies intermediate color and brightness changes every 0.1 seconds.
+7. **Repeat**: Loops continuously until signaled to stop.
 
-- HUE_USER_ID (required at runtime)
-  - The Hue bridge user name/token. Do not commit this to version control.
-- HUE_BRIDGE_IP (optional; default: `192.168.1.2`)
-  - IP address of your Hue Bridge.
-- LOG_LEVEL (optional; default: `INFO`)
-  - Standard Python logging level.
-- REQUEST_TIMEOUT (optional; default: `5.0`)
-  - Timeout (in seconds) for network requests.
-- HUE_MOOD_MAX_SECONDS (optional; default: `30.0`)
-  - Maximum transition duration used by mood lighting when picking a random duration.
-- HUE_MOOD_BULBS (optional)
-  - Comma-separated list of bulb names to run mood lighting on. If not set, only bulbs of
-    type "Extended color light" discovered on the bridge will be used by default.
+### Graceful Shutdown & State Restoration
 
-CLI equivalents:
-- --help or -h: show this help message and exit
-- --list or -l: print the Hue bridge configuration and exit (no mood lighting)
-- --mood-max-seconds or -M
-- --bulbs or -b
+When running the interactive application, pressing **`ESC`** (or **`Ctrl-C`**) signals all mood threads to break out of their loops. Each thread catches the exit signal and restores the bulb to its exact initial power, brightness, and color settings before terminating.
 
-Precedence: CLI options > environment variables > bridge discovery defaults.
+---
 
 ## Testing
 
-Run all tests using Python’s unittest:
+The project uses Python's standard `unittest` framework with full isolation: unit tests never perform live network requests.
+
+### Running Unit Tests
+
+Run all unit tests in verbose mode:
 
 ```bash
 uv run python -m unittest discover -s tests -v
 ```
 
-Integration tests are skipped by default. To enable them (requires a reachable Hue Bridge and correct env vars):
+Run a specific test suite or test case:
 
 ```bash
-INTEGRATION=1 uv run python -m unittest discover -s tests -v
+uv run python -m unittest tests.test_config -v
+uv run python -m unittest tests.test_config.TestConfig.test_defaults_when_env_missing -v
 ```
+
+### Running Integration Tests
+
+Integration tests run against a physical or simulated Hue Bridge on your network. They are skipped by default and require `INTEGRATION=1`:
+
+```bash
+INTEGRATION=1 HUE_USER_ID="<your-user-id>" HUE_BRIDGE_IP="192.168.1.2" uv run python -m unittest discover -s tests -v
+```
+
+---
+
+## Project Structure
+
+```text
+hume/
+├── main.py                     # Application entry point, CLI parser, Hue API and mood lighting logic
+├── pyproject.toml              # Project metadata, Python version requirement, and dependencies
+├── uv.lock                     # Locked dependency graph
+├── CONTRIBUTING.md             # Contribution guidelines and coding conventions
+├── GEMINI.md                   # AI agent reference documentation
+├── README.md                   # Main documentation
+├── docs/
+│   ├── plan.md                 # Architectural design and implementation plan
+│   └── tasks.md                # Task tracking and development roadmap
+└── tests/
+    ├── test_bulb_selection.py  # Tests for CLI/env bulb filtering and precedence
+    ├── test_config.py          # Tests for environment variable loading and validation
+    ├── test_fetch.py           # Tests for bridge state fetching and JSON parsing
+    ├── test_import_and_main.py # Tests ensuring safe imports and main entry point behavior
+    ├── test_integration.py     # Opt-in tests against live Hue Bridge hardware
+    ├── test_mood_stop.py       # Tests for mood loop graceful stop and state restoration
+    └── test_url.py             # Tests for Hue REST API URL normalization
+```
+
+---
 
 ## Troubleshooting
 
-- Missing HUE_USER_ID: Set `HUE_USER_ID` and re-run. Example: `export HUE_USER_ID=...`
-- Timeouts or connection errors: Verify `HUE_BRIDGE_IP` and network connectivity; adjust `REQUEST_TIMEOUT` if necessary.
-- Logging verbosity: Set `LOG_LEVEL=DEBUG` to see detailed diagnostics.
+- **Missing `HUE_USER_ID`**:
+  Ensure `HUE_USER_ID` is exported in your environment. `hume` will log an error and exit with code `1` if it is missing when running the main application.
+  ```bash
+  export HUE_USER_ID="<your-token>"
+  ```
+- **Connection timeouts or network errors**:
+  Verify your Hue Bridge IP address (`HUE_BRIDGE_IP`) and ensure your device is on the same local subnet. Adjust `REQUEST_TIMEOUT` if your bridge is on a slow network.
+- **Bulb not found**:
+  Verify the exact name of your light as registered in the Philips Hue app. Use `uv run python main.py --list` to inspect all light names currently discovered on the bridge.
+- **Verbose logs**:
+  Set `export LOG_LEVEL=DEBUG` for detailed logging of configuration, endpoints, and step transitions.
 
-## Mood Lighting
+---
 
-Start a real-time random dynamic mood loop for a light by name (runs in a daemon thread):
+## License
 
-```bash
-uv run python - <<'PY'
-import os, time, main
-os.environ.setdefault("HUE_USER_ID", "<your-user-id>")
-os.environ.setdefault("HUE_BRIDGE_IP", "192.168.1.2")
-main.setup_logging("INFO")
-# Start the mood thread for the light named "Living Room"
-t = main.start_mood_thread("Living Room")
-# Let it run for a minute (thread continues until process exits)
-time.sleep(60)
-PY
-```
-
-- Configure logging and timeouts via the same env vars described above.
-- Control the maximum random transition duration for mood lighting via either:
-  - Environment: `export HUE_MOOD_MAX_SECONDS=10.0`
-  - CLI flag: `uv run python main.py --mood-max-seconds 10.0` (or `-M 10.0`)
-- Selecting bulbs for mood lighting:
-  - Default: all bulbs discovered on the bridge are used.
-  - Environment: `export HUE_MOOD_BULBS="Kitchen,Living Room"`
-  - CLI flag: `uv run python main.py --bulbs "Kitchen,Living Room"` (or `-b "Kitchen,Living Room"`)
-- Ensure the bridge is reachable; each request uses a timeout to prevent hangs.
-
-### Stopping mood lighting safely
-
-- When running `python main.py` directly, you can press ESC (or Ctrl-C) to stop the
-  application loop. All mood threads are signaled to stop and each bulb is restored to its
-  original color, brightness, and on/off state.
-- Programmatic control: supply a threading.Event to `start_mood_thread()` and set it to
-  request a clean stop with restoration.
-
-Example:
-
-```python
-import threading, time, main
-stop_event = threading.Event()
-main.setup_logging("INFO")
-# Start for one bulb with cooperative stop
-thread = main.start_mood_thread("Living Room", stop_event)
-# Let it run briefly
-time.sleep(5)
-# Ask it to stop and wait
-stop_event.set()
-thread.join()
-```
-
-## Development
-This project will create a real time random dynamic mood lighting based 
-on the hue color bulbs.
-A method named mood will be created that will run as a thread.
-A single argument will be passed which is the name of the bulb.
-1. If the bulb is currently off then turn it on.
-2. Get the current color and brightness of the bulb.
-3. Generate a random color and brightness.
-4. Generate a random transition time between 0.5 seconds and a configurable maximum (default 30.0 seconds).
-5. Calculate the number of 0.1 second steps to get to the new color.
-6. Calculate the increment in brightness for each step.
-7. Calculate the increment in color for each step.
-8. Loop through the number of steps and set the new color and brightness.
-9. Sleep for 0.1 seconds.
-10. Repeat.
+<!-- TODO: Specify project license (e.g., MIT, Apache-2.0, or proprietary) -->
+This project is currently unlicensed. Please add a `LICENSE` file before distributing publicly.

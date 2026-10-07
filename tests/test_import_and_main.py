@@ -7,20 +7,20 @@ import main
 
 
 class TestImportAndMain(unittest.TestCase):
-    def test_import_without_env_does_not_raise_or_call_network(self):
+    def test_import_without_env_does_not_raise_or_call_network(self) -> None:
         with patch.dict(os.environ, {}, clear=True), patch('requests.get') as mock_get:
             # Reload to simulate fresh import under cleared env
             importlib.reload(main)
             mock_get.assert_not_called()
 
-    def test_main_without_user_id_returns_1_and_no_network(self):
+    def test_main_without_user_id_returns_1_and_no_network(self) -> None:
         with patch.dict(os.environ, {}, clear=True), patch('requests.get') as mock_get:
             importlib.reload(main)
             rc = main.main()
             self.assertEqual(rc, 1)
             mock_get.assert_not_called()
 
-    def test_main_success_calls_fetch_and_returns_0(self):
+    def test_main_success_calls_fetch_and_returns_0(self) -> None:
         with patch.dict(
             os.environ,
             {
