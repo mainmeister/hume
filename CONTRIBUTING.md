@@ -28,7 +28,7 @@ uv sync
 export HUE_USER_ID="<your-registered-user-id>"
 
 # Optional
-export HUE_BRIDGE_IP="192.168.1.2"
+export HUE_BRIDGE_IP="192.168.2.19"
 export LOG_LEVEL="INFO"
 export REQUEST_TIMEOUT="5"
 

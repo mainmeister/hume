@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2026-10-07
 
 ### Added
+- CLI options (`--show-daemons`, `--pids`, `-P`) to display all currently running hume daemon PIDs.
+- CLI options (`--kill-daemon`, `--kill`, `-k`) to list running daemon PIDs and interactively prompt the user to enter an index number to terminate a daemon.
 - Daemon mode support via `-d` / `--daemon` CLI flags and `HUE_DAEMON` environment variable for non-interactive continuous execution with graceful `SIGTERM`/`SIGINT` shutdown.
 - CLI help option (`-h`, `--help`) to print usage information and exit ([88f1f54](https://github.com/mainmeister/hume/commit/88f1f54)).
 - CLI listing option (`-l`, `--list`) to inspect Hue bridge configuration and exit ([3b54075](https://github.com/mainmeister/hume/commit/3b54075)).

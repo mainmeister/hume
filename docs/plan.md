@@ -29,7 +29,7 @@ Rationale:
 Plan:
 - Introduce `load_config()` that reads:
   - HUE_USER_ID (required) — error with actionable message if missing when executing main().
-  - HUE_BRIDGE_IP (optional; default "192.168.1.2").
+  - HUE_BRIDGE_IP (optional; default "192.168.2.19").
   - LOG_LEVEL (optional; default INFO).
   - REQUEST_TIMEOUT (optional; default 5.0 seconds).
 - Validate values and redact sensitive values in logs (only last 4 chars for HUE_USER_ID).

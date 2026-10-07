@@ -80,7 +80,7 @@ Configuration is loaded dynamically at runtime via `main.load_config()` with fal
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `HUE_USER_ID` | **Yes** (at runtime) | `None` | Authorized Hue Bridge API username/token. Never commit or log in full (auto-redacted in logs). |
-| `HUE_BRIDGE_IP` | No | `192.168.1.2` | IP address or hostname of the Philips Hue Bridge. |
+| `HUE_BRIDGE_IP` | No | `192.168.2.19` | IP address or hostname of the Philips Hue Bridge. |
 | `LOG_LEVEL` | No | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
 | `REQUEST_TIMEOUT` | No | `5.0` | Timeout in seconds for HTTP requests to prevent network hangs. |
 | `HUE_MOOD_MAX_SECONDS` | No | `30.0` | Upper bound in seconds for random transition durations (clamped to min 0.5s). |
@@ -105,6 +105,8 @@ Options:
   -h, --help                  Show help message and exit
   -l, --list                  Fetch and display Hue bridge configuration, then exit
   -d, -p, --daemon            Run in non-interactive daemon mode (wait for SIGTERM/SIGINT)
+  -P, --show-daemons, --pids  Display all currently running daemon PIDs and exit
+  -k, --kill, --kill-daemon   List running daemon PIDs and prompt to kill one by index
   -M SEC, --mood-max-seconds SEC
                               Maximum transition duration for mood lighting
                               (default via HUE_MOOD_MAX_SECONDS)
@@ -125,6 +127,20 @@ Options:
   export HUE_USER_ID="<your-user-id>"
   uv run python main.py -p
   # or: uv run python main.py --daemon
+  ```
+
+- **Display all currently running daemon PIDs**:
+  ```bash
+  uv run python main.py --show-daemons
+  # or: uv run python main.py -P
+  # or: uv run python main.py --pids
+  ```
+
+- **List running daemons and interactively select one to kill**:
+  ```bash
+  uv run python main.py --kill-daemon
+  # or: uv run python main.py -k
+  # or: uv run python main.py --kill
   ```
 
 - **List bridge state only (no mood lighting started)**:
@@ -158,7 +174,7 @@ import time
 import main
 
 os.environ["HUE_USER_ID"] = "<your-user-id>"
-os.environ["HUE_BRIDGE_IP"] = "192.168.1.2"
+os.environ["HUE_BRIDGE_IP"] = "192.168.2.19"
 main.setup_logging("INFO")
 
 # Create a stop event for cooperative shutdown
@@ -222,7 +238,7 @@ uv run python -m unittest tests.test_config.TestConfig.test_defaults_when_env_mi
 Integration tests run against a physical or simulated Hue Bridge on your network. They are skipped by default and require `INTEGRATION=1`:
 
 ```bash
-INTEGRATION=1 HUE_USER_ID="<your-user-id>" HUE_BRIDGE_IP="192.168.1.2" uv run python -m unittest discover -s tests -v
+INTEGRATION=1 HUE_USER_ID="<your-user-id>" HUE_BRIDGE_IP="192.168.2.19" uv run python -m unittest discover -s tests -v
 ```
 
 ---

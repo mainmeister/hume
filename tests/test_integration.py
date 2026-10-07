@@ -10,9 +10,10 @@ import main
 class TestIntegration(unittest.TestCase):
     def test_fetch_bridge_root_real_bridge(self) -> None:
         user_id = os.getenv("HUE_USER_ID")
-        bridge_ip = os.getenv("HUE_BRIDGE_IP", "192.168.1.2")
+        bridge_ip = os.getenv("HUE_BRIDGE_IP", "192.168.2.19")
         timeout = float(os.getenv("REQUEST_TIMEOUT", "5.0"))
-        self.assertIsNotNone(user_id, "HUE_USER_ID must be set for integration test")
+        if not user_id:
+            self.fail("HUE_USER_ID must be set for integration test")
 
         base_url = main.build_base_url(user_id, bridge_ip)
         try:

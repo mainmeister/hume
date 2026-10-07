@@ -18,7 +18,7 @@ The main entrypoint is `main.py`. It can be executed using `uv run python main.p
 ### Prerequisites
 
 - The `HUE_USER_ID` environment variable **must** be set to a valid Hue bridge user ID.
-- The `HUE_BRIDGE_IP` environment variable can be set to the IP address of the Hue bridge. If not set, it defaults to `192.168.1.2`.
+- The `HUE_BRIDGE_IP` environment variable can be set to the IP address of the Hue bridge. If not set, it defaults to `192.168.2.19`.
 
 ### Displaying Bridge Configuration
 
@@ -30,6 +30,19 @@ uv run python main.py --list
 ```
 
 This will print a JSON object with the bridge's state and then exit.
+
+### Managing Daemon Processes
+
+- **Display running daemon PIDs**:
+  ```bash
+  uv run python main.py --show-daemons
+  # or: uv run python main.py -P
+  ```
+- **List running daemons and kill interactively by index**:
+  ```bash
+  uv run python main.py --kill-daemon
+  # or: uv run python main.py -k
+  ```
 
 ### Running the Mood Lighting Application
 

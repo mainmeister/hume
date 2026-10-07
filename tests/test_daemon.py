@@ -1,5 +1,7 @@
+import io
 import os
 import signal
+import tempfile
 import threading
 import time
 import unittest
@@ -231,6 +233,254 @@ class TestDaemonMode(unittest.TestCase):
         t.join(timeout=2.0)
         self.assertFalse(th.is_alive())
         self.assertTrue(stop_event.is_set())
+
+    def test_is_hume_daemon_cmdline(self) -> None:
+        self.assertTrue(main._is_hume_daemon_cmdline(["python", "main.py", "--daemon"]))
+        self.assertTrue(main._is_hume_daemon_cmdline(["/usr/bin/python3", "/opt/hume/main.py", "-d"]))
+        self.assertTrue(main._is_hume_daemon_cmdline(["hume", "-p"]))
+        self.assertTrue(main._is_hume_daemon_cmdline(["python", "main.py"]))
+        self.assertTrue(main._is_hume_daemon_cmdline(["uv", "run", "python", "main.py", "-d"]))
+
+        # Excluded commands
+        self.assertFalse(main._is_hume_daemon_cmdline([]))
+        self.assertFalse(main._is_hume_daemon_cmdline(["python", "-m", "unittest", "discover"]))
+        self.assertFalse(main._is_hume_daemon_cmdline(["pytest", "tests/test_daemon.py"]))
+        self.assertFalse(main._is_hume_daemon_cmdline(["python", "main.py", "--help"]))
+        self.assertFalse(main._is_hume_daemon_cmdline(["python", "main.py", "-h"]))
+        self.assertFalse(main._is_hume_daemon_cmdline(["python", "main.py", "--show-daemons"]))
+        self.assertFalse(main._is_hume_daemon_cmdline(["python", "main.py", "-P"]))
+        self.assertFalse(main._is_hume_daemon_cmdline(["python", "main.py", "--pids"]))
+        self.assertFalse(main._is_hume_daemon_cmdline(["python", "main.py", "--kill-daemon"]))
+        self.assertFalse(main._is_hume_daemon_cmdline(["python", "main.py", "-k"]))
+        self.assertFalse(main._is_hume_daemon_cmdline(["python", "main.py", "--list"]))
+        self.assertFalse(main._is_hume_daemon_cmdline(["python", "main.py", "-l"]))
+        self.assertFalse(main._is_hume_daemon_cmdline(["grep", "main.py"]))
+
+    def test_pid_registration_and_unregistration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("main._get_pid_dir", return_value=tmpdir):
+                main._register_daemon_pid(88888)
+                pid_file = os.path.join(tmpdir, "88888")
+                self.assertTrue(os.path.exists(pid_file))
+
+                main._unregister_daemon_pid(88888)
+                self.assertFalse(os.path.exists(pid_file))
+
+    def test_get_running_daemon_pids_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("main._get_pid_dir", return_value=tmpdir), patch("os.path.isdir") as mock_isdir:
+                def isdir_mock(path):
+                    if path == tmpdir:
+                        return True
+                    if path == "/proc":
+                        return False
+                    return False
+                mock_isdir.side_effect = isdir_mock
+                with patch("subprocess.run") as mock_subproc:
+                    mock_subproc.return_value = MagicMock(returncode=0, stdout="  PID COMMAND\n")
+                    pids = main.get_running_daemon_pids()
+                    self.assertEqual(pids, [])
+
+    def test_get_running_daemon_pids_from_registry_and_cleans_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("main._get_pid_dir", return_value=tmpdir):
+                main._register_daemon_pid(11111)
+                main._register_daemon_pid(22222)
+
+                def kill_mock(pid, sig):
+                    if pid == 11111:
+                        return None
+                    raise ProcessLookupError()
+
+                with patch("os.kill", side_effect=kill_mock), patch("os.getpid", return_value=99999), patch("os.path.isdir", side_effect=lambda p: p == tmpdir):
+                    pids = main.get_running_daemon_pids()
+                    self.assertEqual(pids, [11111])
+                    # Stale 22222 should have been cleaned up
+                    self.assertFalse(os.path.exists(os.path.join(tmpdir, "22222")))
+                    self.assertTrue(os.path.exists(os.path.join(tmpdir, "11111")))
+
+    def test_get_running_daemon_pids_from_proc(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("main._get_pid_dir", return_value=tmpdir):
+                with patch("os.path.isdir") as mock_isdir:
+                    mock_isdir.side_effect = lambda p: p in (tmpdir, "/proc")
+                    with patch("os.listdir") as mock_listdir:
+                        def listdir_mock(path):
+                            if path == tmpdir:
+                                return []
+                            if path == "/proc":
+                                return ["33333", "44444", "cpuinfo", "self"]
+                            return []
+                        mock_listdir.side_effect = listdir_mock
+
+                        def mock_open_fn(file, mode="r", *args, **kwargs):
+                            if file == "/proc/33333/cmdline":
+                                return io.BytesIO(b"python\x00main.py\x00-d\x00")
+                            if file == "/proc/44444/cmdline":
+                                return io.BytesIO(b"python\x00-m\x00unittest\x00discover\x00")
+                            raise FileNotFoundError()
+
+                        with patch("builtins.open", side_effect=mock_open_fn):
+                            with patch("os.kill", return_value=None), patch("os.getpid", return_value=99999):
+                                pids = main.get_running_daemon_pids()
+                                self.assertEqual(pids, [33333])
+
+    def test_get_running_daemon_pids_from_ps_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("main._get_pid_dir", return_value=tmpdir):
+                with patch("os.path.isdir", side_effect=lambda p: p == tmpdir):
+                    ps_output = """  PID COMMAND
+  12345 python /home/user/hume/main.py --daemon
+  12346 python -m unittest discover
+  12347 /usr/bin/python3 main.py -p
+"""
+                    with patch("subprocess.run") as mock_run:
+                        mock_run.return_value = MagicMock(returncode=0, stdout=ps_output)
+                        with patch("os.kill", return_value=None), patch("os.getpid", return_value=99999):
+                            pids = main.get_running_daemon_pids()
+                            self.assertEqual(pids, [12345, 12347])
+
+    def test_get_running_daemon_pids_excludes_current_process(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("main._get_pid_dir", return_value=tmpdir):
+                main._register_daemon_pid(12345)
+                with patch("os.getpid", return_value=12345), patch("os.kill", return_value=None):
+                    pids = main.get_running_daemon_pids()
+                    self.assertNotIn(12345, pids)
+
+    def test_show_running_daemon_pids_empty(self) -> None:
+        with patch("main.get_running_daemon_pids", return_value=[]), patch("builtins.print") as mock_print:
+            res = main.show_running_daemon_pids()
+            self.assertEqual(res, [])
+            mock_print.assert_called_once_with("No running daemon processes found.")
+
+    def test_show_running_daemon_pids_with_entries(self) -> None:
+        with patch("main.get_running_daemon_pids", return_value=[1234, 5678]), patch("builtins.print") as mock_print:
+            res = main.show_running_daemon_pids()
+            self.assertEqual(res, [1234, 5678])
+            mock_print.assert_any_call("Currently running daemon processes:")
+            mock_print.assert_any_call("  [1] PID 1234")
+            mock_print.assert_any_call("  [2] PID 5678")
+
+    def test_kill_daemon_by_pid_success(self) -> None:
+        kill_calls = []
+        def mock_kill(pid, sig):
+            kill_calls.append((pid, sig))
+            if sig == 0:
+                # After sending signal, process is gone
+                raise ProcessLookupError()
+            return None
+
+        with patch("os.kill", side_effect=mock_kill), patch("main._unregister_daemon_pid") as mock_unreg:
+            success = main.kill_daemon_by_pid(12345)
+            self.assertTrue(success)
+            self.assertIn((12345, signal.SIGTERM), kill_calls)
+            mock_unreg.assert_called_with(12345)
+
+    def test_kill_daemon_by_pid_process_lookup_error_on_sigterm(self) -> None:
+        with patch("os.kill", side_effect=ProcessLookupError()), patch("main._unregister_daemon_pid") as mock_unreg:
+            success = main.kill_daemon_by_pid(12345)
+            self.assertTrue(success)
+            mock_unreg.assert_called_with(12345)
+
+    def test_kill_daemon_by_pid_fallback_sigkill(self) -> None:
+        kill_calls = []
+        def mock_kill(pid, sig):
+            kill_calls.append((pid, sig))
+            return None  # Never raises ProcessLookupError
+
+        with patch("os.kill", side_effect=mock_kill), patch("time.sleep"), patch("main._unregister_daemon_pid") as mock_unreg:
+            success = main.kill_daemon_by_pid(12345, timeout=0.01)
+            self.assertTrue(success)
+            self.assertIn((12345, signal.SIGTERM), kill_calls)
+            self.assertIn((12345, signal.SIGKILL), kill_calls)
+            mock_unreg.assert_called_with(12345)
+
+    def test_kill_daemon_by_pid_os_error_sigterm(self) -> None:
+        with patch("os.kill", side_effect=PermissionError("Permission denied")):
+            success = main.kill_daemon_by_pid(12345)
+            self.assertFalse(success)
+
+    def test_kill_daemon_interactive_no_daemons(self) -> None:
+        with patch("main.get_running_daemon_pids", return_value=[]), patch("builtins.print") as mock_print:
+            res = main.kill_daemon_interactive()
+            self.assertFalse(res)
+            mock_print.assert_called_once_with("No running daemon processes found.")
+
+    def test_kill_daemon_interactive_cancel(self) -> None:
+        with patch("main.get_running_daemon_pids", return_value=[12345]), patch("builtins.print") as mock_print:
+            res = main.kill_daemon_interactive(input_fn=lambda prompt: "q")
+            self.assertFalse(res)
+            mock_print.assert_any_call("Cancelled. No daemon process was killed.")
+
+    def test_kill_daemon_interactive_eof(self) -> None:
+        def mock_input(prompt):
+            raise EOFError()
+
+        with patch("main.get_running_daemon_pids", return_value=[12345]), patch("builtins.print") as mock_print:
+            res = main.kill_daemon_interactive(input_fn=mock_input)
+            self.assertFalse(res)
+            mock_print.assert_any_call("\nCancelled.")
+
+    def test_kill_daemon_interactive_valid_index(self) -> None:
+        with patch("main.get_running_daemon_pids", return_value=[1234, 5678]), patch("main.kill_daemon_by_pid", return_value=True) as mock_kill, patch("builtins.print") as mock_print:
+            res = main.kill_daemon_interactive(input_fn=lambda prompt: "2")
+            self.assertTrue(res)
+            mock_kill.assert_called_once_with(5678)
+            mock_print.assert_any_call("Killed daemon process with PID 5678.")
+
+    def test_kill_daemon_interactive_invalid_then_valid(self) -> None:
+        inputs = iter(["abc", "99", "1"])
+        with patch("main.get_running_daemon_pids", return_value=[1234]), patch("main.kill_daemon_by_pid", return_value=True) as mock_kill, patch("builtins.print") as mock_print:
+            res = main.kill_daemon_interactive(input_fn=lambda prompt: next(inputs))
+            self.assertTrue(res)
+            mock_kill.assert_called_once_with(1234)
+            mock_print.assert_any_call("Invalid input: 'abc'. Please enter a number between 1 and 1 (or 'q' to cancel).")
+            mock_print.assert_any_call("Invalid index: 99. Please enter a number between 1 and 1 (or 'q' to cancel).")
+            mock_print.assert_any_call("Killed daemon process with PID 1234.")
+
+    def test_kill_daemon_interactive_kill_failed(self) -> None:
+        with patch("main.get_running_daemon_pids", return_value=[1234]), patch("main.kill_daemon_by_pid", return_value=False) as mock_kill, patch("builtins.print") as mock_print:
+            res = main.kill_daemon_interactive(input_fn=lambda prompt: "1")
+            self.assertFalse(res)
+            mock_kill.assert_called_once_with(1234)
+            mock_print.assert_any_call("Failed to kill daemon process with PID 1234.")
+
+    def test_cli_entrypoint_show_daemons_flag(self) -> None:
+        with patch("main.show_running_daemon_pids") as mock_show:
+            for flag in ("-P", "--show-daemons", "--pids", "--list-daemons"):
+                rc = main.cli_entrypoint([flag])
+                self.assertEqual(rc, 0)
+            self.assertEqual(mock_show.call_count, 4)
+
+    def test_cli_entrypoint_kill_daemon_flag(self) -> None:
+        with patch("main.kill_daemon_interactive") as mock_kill_cli:
+            for flag in ("-k", "--kill", "--kill-daemon", "--kill-daemons"):
+                rc = main.cli_entrypoint([flag])
+                self.assertEqual(rc, 0)
+            self.assertEqual(mock_kill_cli.call_count, 4)
+
+    def test_cli_entrypoint_help_flag(self) -> None:
+        with patch("builtins.print") as mock_print:
+            rc = main.cli_entrypoint(["--help"])
+            self.assertEqual(rc, 0)
+            help_text = mock_print.call_args[0][0]
+            self.assertIn("--show-daemons", help_text)
+            self.assertIn("--kill-daemon", help_text)
+
+    def test_cli_entrypoint_list_only(self) -> None:
+        with patch("main.main", return_value=0) as mock_main, patch("main.run_mood_application") as mock_mood:
+            rc = main.cli_entrypoint(["--list"])
+            self.assertEqual(rc, 0)
+            mock_main.assert_called_once()
+            mock_mood.assert_not_called()
+
+    def test_cli_entrypoint_default_mood(self) -> None:
+        with patch("main.main", return_value=0) as mock_main, patch("main.run_mood_application") as mock_mood:
+            rc = main.cli_entrypoint([])
+            self.assertEqual(rc, 0)
+            mock_main.assert_called_once()
+            mock_mood.assert_called_once_with(daemon=False)
 
 
 if __name__ == "__main__":

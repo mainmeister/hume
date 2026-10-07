@@ -1,7 +1,6 @@
 import os
 import unittest
 from unittest.mock import patch
-import importlib
 
 import main
 
@@ -11,7 +10,7 @@ class TestConfig(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             cfg = main.load_config()
             self.assertIsNone(cfg["user_id"])  # not required at import
-            self.assertEqual(cfg["bridge_ip"], "192.168.1.2")
+            self.assertEqual(cfg["bridge_ip"], "192.168.2.19")
             self.assertEqual(cfg["log_level"], "INFO")
             self.assertEqual(cfg["timeout"], 5.0)
 

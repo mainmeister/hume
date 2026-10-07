@@ -12,7 +12,7 @@ A logically ordered, actionable plan to evolve the "hume" project from a single-
    - [ ] Protect runtime behavior with if __name__ == "__main__": to avoid side effects on import.
 
 3. [ ] Improve configuration handling
-   - [ ] Replace hard-coded BRIDGE_IP with environment variable HUE_BRIDGE_IP (default to 192.168.1.2).
+   - [ ] Replace hard-coded BRIDGE_IP with environment variable HUE_BRIDGE_IP (default to 192.168.2.19).
    - [ ] Centralize configuration reading in a function (e.g., load_config()) with validation and helpful errors.
 
 4. [ ] Modularize Hue logic

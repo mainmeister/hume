@@ -20,7 +20,9 @@ import logging
 import os
 import random
 import signal
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Any, Dict, Optional
@@ -55,6 +57,309 @@ def is_daemon_mode(argv: list[str] | None = None) -> bool:
     return env_val in ("1", "true", "yes", "y", "t", "on")
 
 
+def _get_pid_dir() -> str:
+    pid_dir = os.path.join(tempfile.gettempdir(), ".hume_pids")
+    try:
+        os.makedirs(pid_dir, exist_ok=True)
+    except OSError:
+        pass
+    return pid_dir
+
+
+def _register_daemon_pid(pid: int) -> None:
+    try:
+        pid_dir = _get_pid_dir()
+        pid_file = os.path.join(pid_dir, str(pid))
+        with open(pid_file, "w") as f:
+            f.write(str(pid))
+    except OSError:
+        pass
+
+
+def _unregister_daemon_pid(pid: int) -> None:
+    try:
+        pid_dir = _get_pid_dir()
+        pid_file = os.path.join(pid_dir, str(pid))
+        if os.path.exists(pid_file):
+            os.remove(pid_file)
+    except OSError:
+        pass
+
+
+def _is_hume_daemon_cmdline(args: list[str], pid: int | None = None) -> bool:
+    """Check if command-line arguments correspond to a running hume daemon/mood process."""
+    if not args:
+        return False
+
+    current_pid = os.getpid()
+    parent_pid = os.getppid() if hasattr(os, "getppid") else -1
+    if pid is not None and (pid == current_pid or pid == parent_pid):
+        return False
+
+    joined = " ".join(args)
+    joined_lower = joined.lower()
+
+    # Exclude test runners, linters, or unrelated development / system tools
+    exclude_markers = [
+        "unittest",
+        "pytest",
+        "test_",
+        "ruff",
+        "flake8",
+        "black",
+        "mypy",
+        "git",
+        "grep",
+        "vim",
+        "nano",
+        "ulauncher",
+    ]
+    if any(marker in joined_lower for marker in exclude_markers):
+        return False
+
+    # Exclude transient CLI utility commands
+    cli_transient_flags = {
+        "-h",
+        "--help",
+        "-l",
+        "--list",
+        "-P",
+        "--show-daemons",
+        "--pids",
+        "--show-pids",
+        "--list-daemons",
+        "--daemons",
+        "-k",
+        "-K",
+        "--kill",
+        "--kill-daemon",
+        "--kill-daemons",
+    }
+    if any(arg in cli_transient_flags for arg in args):
+        return False
+
+    # 1. Direct hume project or module reference
+    if "hume" in joined_lower:
+        for arg in args:
+            base = os.path.basename(arg)
+            if base in ("main.py", "hume", "hume.py") or "hume" in arg.lower():
+                return True
+
+    # 2. Check process cwd via /proc if available
+    if pid is not None and os.path.isdir("/proc"):
+        try:
+            cwd = os.path.realpath(f"/proc/{pid}/cwd")
+            if "hume" in cwd.lower():
+                for arg in args:
+                    if os.path.basename(arg) in ("main.py", "hume.py"):
+                        return True
+        except (OSError, IOError, PermissionError):
+            pass
+
+    # 3. Direct relative main.py invocation
+    for arg in args:
+        if arg in ("main.py", "./main.py"):
+            return True
+
+    return False
+
+
+def get_running_daemon_pids() -> list[int]:
+    """Find and return all currently running hume daemon PIDs (sorted)."""
+    pids: set[int] = set()
+    current_pid = os.getpid()
+    parent_pid = os.getppid() if hasattr(os, "getppid") else -1
+
+    # 1. Check PID registry directory
+    pid_dir = _get_pid_dir()
+    if os.path.isdir(pid_dir):
+        try:
+            for fname in os.listdir(pid_dir):
+                if fname.isdigit():
+                    pid = int(fname)
+                    if pid == current_pid or pid == parent_pid:
+                        continue
+                    try:
+                        os.kill(pid, 0)
+                        pids.add(pid)
+                    except OSError:
+                        # Clean up stale pid file
+                        _unregister_daemon_pid(pid)
+        except OSError:
+            pass
+
+    # 2. Check /proc on Linux
+    if os.path.isdir("/proc"):
+        try:
+            for entry in os.listdir("/proc"):
+                if not entry.isdigit():
+                    continue
+                pid = int(entry)
+                if pid == current_pid or pid == parent_pid or pid in pids:
+                    continue
+                cmdline_file = f"/proc/{pid}/cmdline"
+                try:
+                    with open(cmdline_file, "rb") as f:
+                        raw = f.read()
+                    args = [
+                        arg.decode("utf-8", errors="replace")
+                        for arg in raw.split(b"\x00")
+                        if arg
+                    ]
+                    if _is_hume_daemon_cmdline(args, pid=pid):
+                        try:
+                            os.kill(pid, 0)
+                            pids.add(pid)
+                        except OSError:
+                            pass
+                except (OSError, IOError, PermissionError):
+                    continue
+        except OSError:
+            pass
+
+    # 3. Fallback to `ps` command on systems without /proc (or macOS/BSD)
+    if not os.path.isdir("/proc"):
+        try:
+            proc = subprocess.run(
+                ["ps", "-eo", "pid,args"],
+                capture_output=True,
+                text=True,
+                timeout=3.0,
+                check=False,
+            )
+            if proc.returncode == 0:
+                for line in proc.stdout.splitlines()[1:]:
+                    parts = line.strip().split(None, 1)
+                    if len(parts) >= 2 and parts[0].isdigit():
+                        pid = int(parts[0])
+                        if pid == current_pid or pid == parent_pid or pid in pids:
+                            continue
+                        args = parts[1].split()
+                        if _is_hume_daemon_cmdline(args, pid=pid):
+                            try:
+                                os.kill(pid, 0)
+                                pids.add(pid)
+                            except OSError:
+                                pass
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    # Filter out any non-alive PIDs, current process, or parent process
+    alive_pids: list[int] = []
+    for pid in sorted(pids):
+        if pid == current_pid or pid == parent_pid:
+            continue
+        try:
+            os.kill(pid, 0)
+            alive_pids.append(pid)
+        except OSError:
+            pass
+
+    return sorted(alive_pids)
+
+
+def show_running_daemon_pids(pids: list[int] | None = None) -> list[int]:
+    """Display all currently running daemon PIDs and return the list."""
+    if pids is None:
+        pids = get_running_daemon_pids()
+
+    if not pids:
+        print("No running daemon processes found.")
+    else:
+        print("Currently running daemon processes:")
+        for idx, pid in enumerate(pids, 1):
+            print(f"  [{idx}] PID {pid}")
+    return pids
+
+
+def kill_daemon_by_pid(pid: int, timeout: float = 2.0) -> bool:
+    """Terminate a daemon process by PID using SIGTERM with fallback to SIGKILL."""
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        _unregister_daemon_pid(pid)
+        return True
+    except OSError as e:
+        logger.error("Failed to send SIGTERM to process %s: %s", pid, e)
+        return False
+
+    # Wait briefly for process to exit
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            os.kill(pid, 0)
+            time.sleep(0.05)
+        except ProcessLookupError:
+            _unregister_daemon_pid(pid)
+            return True
+        except OSError:
+            break
+
+    # If still alive, force kill with SIGKILL if available
+    try:
+        if hasattr(signal, "SIGKILL"):
+            os.kill(pid, signal.SIGKILL)
+            _unregister_daemon_pid(pid)
+            return True
+    except ProcessLookupError:
+        _unregister_daemon_pid(pid)
+        return True
+    except OSError as e:
+        logger.error("Failed to SIGKILL process %s: %s", pid, e)
+        return False
+
+    _unregister_daemon_pid(pid)
+    return True
+
+
+def kill_daemon_interactive(
+    pids: list[int] | None = None, input_fn: Any = input
+) -> bool:
+    """List running daemon PIDs and prompt user to enter an index to kill it."""
+    if pids is None:
+        pids = get_running_daemon_pids()
+
+    if not pids:
+        print("No running daemon processes found.")
+        return False
+
+    print("Currently running daemon processes:")
+    for idx, pid in enumerate(pids, 1):
+        print(f"  [{idx}] PID {pid}")
+    print()
+
+    while True:
+        try:
+            prompt = f"Enter index of daemon to kill (1-{len(pids)}) or 'q' to cancel: "
+            user_input = input_fn(prompt).strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            return False
+
+        if not user_input or user_input.lower() in ("q", "quit", "c", "cancel", "exit"):
+            print("Cancelled. No daemon process was killed.")
+            return False
+
+        try:
+            idx = int(user_input)
+            if 1 <= idx <= len(pids):
+                target_pid = pids[idx - 1]
+                if kill_daemon_by_pid(target_pid):
+                    print(f"Killed daemon process with PID {target_pid}.")
+                    return True
+                else:
+                    print(f"Failed to kill daemon process with PID {target_pid}.")
+                    return False
+            else:
+                print(
+                    f"Invalid index: {idx}. Please enter a number between 1 and {len(pids)} (or 'q' to cancel)."
+                )
+        except ValueError:
+            print(
+                f"Invalid input: '{user_input}'. Please enter a number between 1 and {len(pids)} (or 'q' to cancel)."
+            )
+
+
 def fork_daemon_process() -> int:
     """Fork the current process into background, exit the parent, and display child PID/task ID.
 
@@ -67,6 +372,7 @@ def fork_daemon_process() -> int:
             sys.exit(0)
 
     child_pid = os.getpid()
+    _register_daemon_pid(child_pid)
     print(f"Daemon process started with PID: {child_pid}", flush=True)
     logger.info("Daemon process running with PID: %s", child_pid)
     return child_pid
@@ -79,7 +385,7 @@ def load_config() -> Dict[str, Any]:
     Note: user_id may be None; main() validates and handles errors with messaging.
     """
     user_id = os.getenv("HUE_USER_ID")
-    bridge_ip = os.getenv("HUE_BRIDGE_IP", "192.168.1.2")
+    bridge_ip = os.getenv("HUE_BRIDGE_IP", "192.168.2.19")
     log_level = os.getenv("LOG_LEVEL", "INFO")
     timeout_raw = os.getenv("REQUEST_TIMEOUT", "5.0")
     daemon = is_daemon_mode()
@@ -240,9 +546,9 @@ def _get_mood_max_seconds(default: float = 30.0) -> float:
         value = default
 
     # Clamp to sensible minimum (0.5s)
-    if value < 0.5:
+    if value is not None and value < 0.5:
         value = 0.5
-    return float(value)
+    return float(value) if value is not None else float(default)
 
 
 def mood(
@@ -258,8 +564,8 @@ def mood(
     load_config() at call time and performs no network at import time.
     """
     cfg = load_config()
-    user_id = cfg.get("user_id")
-    bridge_ip = cfg.get("bridge_ip")
+    user_id = str(cfg.get("user_id") or "")
+    bridge_ip = str(cfg.get("bridge_ip") or "192.168.2.19")
     timeout = float(cfg.get("timeout", 5.0))
 
     if not user_id:
@@ -599,8 +905,8 @@ def run_mood_application(
         daemon = is_daemon_mode()
 
     cfg = load_config()
-    user_id = cfg.get("user_id")
-    bridge_ip = cfg.get("bridge_ip")
+    user_id = str(cfg.get("user_id") or "")
+    bridge_ip = str(cfg.get("bridge_ip") or "192.168.2.19")
     timeout = float(cfg.get("timeout", 5.0))
 
     if not user_id:
@@ -626,19 +932,22 @@ def run_mood_application(
         threads.append(t)
     logger.info("Mood threads started for bulbs: %s", ", ".join(bulbs))
 
-    if daemon:
-        logger.info("Running in daemon mode. Waiting for termination signal (SIGTERM/SIGINT) to stop...")
-        _wait_for_signal_or_stop_event(stop_event)
-    else:
-        logger.info("Press ESC (or Ctrl-C) to stop and restore bulbs...")
-        _wait_for_escape_or_sigint()
-
-    logger.info("Stopping mood threads and restoring bulbs...")
-    stop_event.set()
-    # Join threads briefly; they restore on exit
-    for t in threads:
-        t.join(timeout=10.0)
-    logger.info("All mood threads stopped.")
+    try:
+        if daemon:
+            logger.info("Running in daemon mode. Waiting for termination signal (SIGTERM/SIGINT) to stop...")
+            _wait_for_signal_or_stop_event(stop_event)
+        else:
+            logger.info("Press ESC (or Ctrl-C) to stop and restore bulbs...")
+            _wait_for_escape_or_sigint()
+    finally:
+        logger.info("Stopping mood threads and restoring bulbs...")
+        stop_event.set()
+        # Join threads briefly; they restore on exit
+        for t in threads:
+            t.join(timeout=10.0)
+        logger.info("All mood threads stopped.")
+        if daemon:
+            _unregister_daemon_pid(os.getpid())
 
 
 def main() -> int:
@@ -647,8 +956,8 @@ def main() -> int:
     # Configure logging early
     setup_logging(cfg.get("log_level"))
 
-    user_id = cfg.get("user_id")
-    bridge_ip = cfg.get("bridge_ip")
+    user_id = str(cfg.get("user_id") or "")
+    bridge_ip = str(cfg.get("bridge_ip") or "192.168.2.19")
     timeout = float(cfg.get("timeout", 5.0))
 
     if not user_id:
@@ -676,9 +985,13 @@ def main() -> int:
         return 3
 
 
-if __name__ == "__main__":
+def cli_entrypoint(argv: list[str] | None = None) -> int:
+    """Main CLI entrypoint for parsing flags, running query commands, or starting mood."""
+    if argv is None:
+        argv = sys.argv[1:] if isinstance(sys.argv, list) else []
+
     # Help: show usage and exit without performing any network I/O or starting mood.
-    if any(arg in ("-h", "--help") for arg in sys.argv[1:]):
+    if any(arg in ("-h", "--help") for arg in argv):
         print(
             """Usage: python main.py [options]
 
@@ -686,6 +999,8 @@ Options:
   -h, --help                  Show this help message and exit
   -l, --list                  Fetch and display Hue bridge configuration, then exit
   -d, -p, --daemon            Run in non-interactive daemon mode (wait for SIGTERM/SIGINT)
+  -P, --show-daemons, --pids  Display all currently running daemon PIDs and exit
+  -k, --kill, --kill-daemon   List running daemon PIDs and prompt to kill one by index
   -M SEC, --mood-max-seconds SEC
                               Maximum transition duration for mood lighting
                               (default via HUE_MOOD_MAX_SECONDS)
@@ -694,7 +1009,7 @@ Options:
 
 Environment:
   HUE_USER_ID                 Required at runtime
-  HUE_BRIDGE_IP               Hue bridge IP (default 192.168.1.2)
+  HUE_BRIDGE_IP               Hue bridge IP (default 192.168.2.19)
   LOG_LEVEL                   Logging level (default INFO)
   REQUEST_TIMEOUT             Network timeout seconds (default 5.0)
   HUE_MOOD_MAX_SECONDS        Max transition seconds for mood lighting (default 30.0)
@@ -702,14 +1017,33 @@ Environment:
   HUE_DAEMON                  Enable daemon mode if set to 1/true
 """
         )
-        sys.exit(0)
+        return 0
+
+    if any(
+        arg in ("-P", "--show-daemons", "--pids", "--show-pids", "--list-daemons", "--daemons")
+        for arg in argv
+    ):
+        show_running_daemon_pids()
+        return 0
+
+    if any(
+        arg in ("-k", "-K", "--kill", "--kill-daemon", "--kill-daemons")
+        for arg in argv
+    ):
+        kill_daemon_interactive()
+        return 0
 
     # Detect list-only mode: when -l/--list is provided, we only display the
     # Hue bridge configuration and exit without starting the mood application.
-    list_only = any(arg in ("-l", "--list") for arg in sys.argv[1:])
+    list_only = any(arg in ("-l", "--list") for arg in argv)
 
     rc = main()
     if rc == 0 and not list_only:
         # Start mood application (interactive with ESC/Ctrl-C or daemon mode with signals)
-        daemon_mode = is_daemon_mode()
+        daemon_mode = is_daemon_mode(argv)
         run_mood_application(daemon=daemon_mode)
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(cli_entrypoint())
