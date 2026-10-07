@@ -84,6 +84,62 @@ class TestMoodStop(unittest.TestCase):
             self.assertEqual(payload.get("hue"), 1000)
             self.assertEqual(payload.get("sat"), 100)
 
+    @patch("requests.put")
+    @patch("requests.get")
+    def test_mood_uses_native_transitiontime(self, mock_get, mock_put) -> None:
+        with self._setup_env():
+            importlib.reload(hume)
+            orig = {"on": True, "bri": 100, "hue": 10000, "sat": 150}
+            mock_get.side_effect = self._make_get_side_effect(orig_state=orig)
+            mock_put.return_value = MagicMock(json=lambda: {})
+
+            stop_event = threading.Event()
+
+            with patch("random.uniform", return_value=12.5), \
+                 patch("random.randint", side_effect=[30000, 200, 150]):
+                # Start mood thread
+                t = hume.start_mood_thread("TestBulb", stop_event)
+                # Wait briefly to let the single PUT request execute
+                time.sleep(0.05)
+                stop_event.set()
+                t.join(timeout=2.0)
+
+            self.assertFalse(t.is_alive())
+            # Expected calls: 1 mood transition call + 1 restoration call
+            self.assertEqual(mock_put.call_count, 2)
+            first_call_payload = mock_put.call_args_list[0].kwargs.get("json")
+            self.assertEqual(first_call_payload.get("hue"), 30000)
+            self.assertEqual(first_call_payload.get("sat"), 200)
+            self.assertEqual(first_call_payload.get("bri"), 150)
+            self.assertEqual(first_call_payload.get("transitiontime"), 125)
+
+            restore_payload = mock_put.call_args_list[1].kwargs.get("json")
+            self.assertEqual(restore_payload.get("transitiontime"), 0)
+            self.assertEqual(restore_payload.get("hue"), 10000)
+
+    @patch("requests.put")
+    @patch("requests.get")
+    def test_mood_transient_error_handling(self, mock_get, mock_put) -> None:
+        import requests
+        with self._setup_env():
+            importlib.reload(hume)
+            orig = {"on": True, "bri": 100, "hue": 10000, "sat": 150}
+            mock_get.side_effect = self._make_get_side_effect(orig_state=orig)
+            # Make the first PUT raise RequestException, second (restore) succeed
+            mock_put.side_effect = [
+                requests.exceptions.RequestException("Bridge busy"),
+                MagicMock(json=lambda: {}),
+            ]
+
+            stop_event = threading.Event()
+            t = hume.start_mood_thread("TestBulb", stop_event)
+            time.sleep(0.05)
+            stop_event.set()
+            t.join(timeout=2.0)
+
+            self.assertFalse(t.is_alive())
+            self.assertGreaterEqual(mock_put.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

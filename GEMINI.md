@@ -93,7 +93,7 @@ The bulbs to be used for mood lighting are selected with the following precedenc
 
 - The mood lighting loop for each bulb runs in a separate thread.
 - The loop continuously changes the bulb's color, brightness, and saturation.
-- The transitions are randomized.
+- Transitions use native Hue `transitiontime` parameters for smooth hardware-level fades without polling the bridge.
 - If a bulb is off, it will be turned on.
 - When the application is stopped, the bulbs are restored to their original state (on/off, color, and brightness).
 

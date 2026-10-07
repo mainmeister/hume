@@ -1144,44 +1144,30 @@ def mood(
             max_seconds = _get_mood_max_seconds(30.0)
             t_seconds = random.uniform(0.5, max_seconds)
 
-            # 5. Number of 0.1s steps
-            steps = max(1, int(round(t_seconds / 0.1)))
+            # 5. Convert duration to deciseconds (100ms units) for native bridge transition
+            transition_ds = int(round(t_seconds * 10))
 
-            # 6-7. Per-step increments
-            dhue = (tgt_hue - cur_hue) / steps
-            dsat = (tgt_sat - cur_sat) / steps
-            dbri = (tgt_bri - cur_bri) / steps
+            # 6. Issue ONE single command to the bridge for hardware-accelerated transition
+            try:
+                set_light_state(
+                    base_url,
+                    light_id,
+                    on=True,
+                    bri=tgt_bri,
+                    hue=tgt_hue,
+                    sat=tgt_sat,
+                    transitiontime=transition_ds,
+                    timeout=timeout,
+                )
+            except requests.exceptions.RequestException as e:
+                logger.warning("Transient error setting light state: %s", e)
 
-            # 8-9. Loop applying incremental updates
-            for i in range(1, steps + 1):
-                if stop_event is not None and stop_event.is_set():
+            # 7. Sleep for the transition duration while remaining interruptible
+            if stop_event is not None:
+                if stop_event.wait(timeout=t_seconds):
                     break
-                cur_hue = int(_clamp(round(cur_hue + dhue), 0, 65535))
-                cur_sat = int(_clamp(round(cur_sat + dsat), 0, 254))
-                cur_bri = int(_clamp(round(cur_bri + dbri), 1, 254))
-                try:
-                    set_light_state(
-                        base_url,
-                        light_id,
-                        on=True,
-                        bri=cur_bri,
-                        hue=cur_hue,
-                        sat=cur_sat,
-                        # Using bridge-side 100ms transition to smooth micro-steps if desired
-                        transitiontime=0,
-                        timeout=timeout,
-                    )
-                except requests.exceptions.RequestException as e:
-                    logger.warning("Transient error setting light state: %s", e)
-                    # Continue trying next step after sleep
-                time.sleep(0.1)
-
-            # If we broke early due to stop_event, exit outer loop too
-            if stop_event is not None and stop_event.is_set():
-                break
-
-            # 10. Repeat with new random target (current already updated)
-            # Loop continues
+            else:
+                time.sleep(t_seconds)
     finally:
         # Attempt to restore original state when exiting the loop
         if restore_on_exit:

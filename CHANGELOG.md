@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Safe termination mechanism for mood lighting loops with initial bulb state restoration on ESC key press ([86906df](https://github.com/mainmeister/hume/commit/86906df)).
 
 ### Changed
+- Refactored mood loop to use native Hue bridge hardware transitions (`transitiontime`) with interruptible sleep instead of continuous 0.1-second HTTP polling, maximizing bridge responsiveness for voice assistants and external commands.
 - Required explicit bulb selection (`--bulbs`/`-b`, `HUE_MOOD_BULBS`, or `--all`/`-a`); running without bulbs specified is now treated as an error instead of automatically defaulting to all bulbs.
 - Bridge configuration display restricted to explicit invocation via `-l` / `--list` CLI flags, keeping standard mood lighting startup output clean.
 - Display of bridge configuration, lights, groups, and devices formatted into clean, structured ASCII tables and grids instead of raw JSON.

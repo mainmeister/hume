@@ -221,10 +221,11 @@ For each targeted bulb, `hume.mood()` executes an asynchronous loop in a dedicat
 1. **Discovery & Validation**: Looks up the bulb's light ID by name.
 2. **Initial State Capture**: Records the current on/off, brightness (`bri`), hue (`hue`), and saturation (`sat`) state for restoration on exit.
 3. **Power On**: If the bulb is currently off, turns it on.
-4. **Target Generation**: Randomly generates a new target hue (`0–65535`), saturation (`0–254`), and brightness (`1–254`).
-5. **Duration & Step Calculation**: Randomly picks a transition time between 0.5s and `mood_max_seconds` (default 30.0s), dividing the transition into discrete `0.1s` increments.
-6. **Smooth Transition**: Incrementally applies intermediate color and brightness changes every 0.1 seconds.
-7. **Repeat**: Loops continuously until signaled to stop.
+4. **Target Generation**: Randomly generates a new target hue (`0–65535`), saturation (`150–254`), and brightness (`10–254`).
+5. **Duration & Transition Calculation**: Randomly selects a transition duration between 0.5s and `mood_max_seconds` (default 30.0s) and translates it into native Hue deciseconds (`transitiontime`).
+6. **Native Hardware Transition**: Issues a single HTTP request per transition with the target state and `transitiontime`, offloading smooth linear color interpolation to the bulb's microcontroller.
+7. **Interruptible Sleep**: Waits for the transition duration while remaining immediately responsive to cooperative exit signals.
+8. **Repeat**: Loops continuously until signaled to stop.
 
 ### Graceful Shutdown & State Restoration
 
