@@ -364,12 +364,23 @@ class TestDaemonMode(unittest.TestCase):
             mock_print.assert_called_once_with("No running daemon processes found.")
 
     def test_show_running_daemon_pids_with_entries(self) -> None:
-        with patch("hume.get_running_daemon_pids", return_value=[1234, 5678]), patch("builtins.print") as mock_print:
+        with patch("hume.get_running_daemon_pids", return_value=[1234, 5678]), patch(
+            "hume.get_daemon_options", side_effect=lambda pid: "-a -p" if pid == 1234 else "--bulbs 'Living Room' -p"
+        ), patch("builtins.print") as mock_print:
             res = hume.show_running_daemon_pids()
             self.assertEqual(res, [1234, 5678])
             mock_print.assert_any_call("Currently running daemon processes:")
-            mock_print.assert_any_call("  [1] PID 1234")
-            mock_print.assert_any_call("  [2] PID 5678")
+            mock_print.assert_any_call("  [1] PID 1234 (options: -a -p)")
+            mock_print.assert_any_call("  [2] PID 5678 (options: --bulbs 'Living Room' -p)")
+
+    def test_show_running_daemon_pids_with_no_options(self) -> None:
+        with patch("hume.get_running_daemon_pids", return_value=[1234]), patch(
+            "hume.get_daemon_options", return_value=""
+        ), patch("builtins.print") as mock_print:
+            res = hume.show_running_daemon_pids()
+            self.assertEqual(res, [1234])
+            mock_print.assert_any_call("Currently running daemon processes:")
+            mock_print.assert_any_call("  [1] PID 1234 (options: none)")
 
     def test_kill_daemon_by_pid_success(self) -> None:
         kill_calls = []
@@ -527,6 +538,85 @@ class TestDaemonMode(unittest.TestCase):
             self.assertEqual(rc, 0)
             mock_main.assert_called_once_with(show_config=False)
             mock_mood.assert_called_once_with(daemon=False, argv=[])
+
+    def test_format_options_from_args(self) -> None:
+        self.assertEqual(hume._format_options_from_args([]), "")
+        self.assertEqual(hume._format_options_from_args(["-a", "-p"]), "-a -p")
+        self.assertEqual(
+            hume._format_options_from_args(["--bulbs", "Living Room,Bedroom", "-M", "15.0"]),
+            "--bulbs 'Living Room,Bedroom' -M 15.0",
+        )
+
+    def test_extract_options_from_cmdline(self) -> None:
+        # Direct python invocation with hume.py
+        args1 = ["/usr/bin/python3", "/path/to/hume.py", "-a", "-p"]
+        self.assertEqual(hume._extract_options_from_cmdline(args1), "-a -p")
+
+        # Wrapper script named hume
+        args2 = ["/home/user/.local/bin/hume", "--all", "--daemon"]
+        self.assertEqual(hume._extract_options_from_cmdline(args2), "--all --daemon")
+
+        # Python module invocation
+        args3 = ["python3", "-m", "hume", "-b", "Living Room", "-p"]
+        self.assertEqual(hume._extract_options_from_cmdline(args3), "-b 'Living Room' -p")
+
+        # No script name found, but options start with '-'
+        args4 = ["-a", "-p"]
+        self.assertEqual(hume._extract_options_from_cmdline(args4), "-a -p")
+
+        # Script with no options
+        args5 = ["python", "hume.py"]
+        self.assertEqual(hume._extract_options_from_cmdline(args5), "")
+
+        # Empty args
+        self.assertEqual(hume._extract_options_from_cmdline([]), "")
+
+    def test_get_daemon_options_from_pid_file_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("hume._get_pid_dir", return_value=tmpdir):
+                hume._register_daemon_pid(12345, args=["-a", "-p"])
+                opts = hume.get_daemon_options(12345)
+                self.assertEqual(opts, "-a -p")
+
+    def test_get_daemon_options_from_pid_file_legacy_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("hume._get_pid_dir", return_value=tmpdir):
+                pid_file = os.path.join(tmpdir, "12345")
+                with open(pid_file, "w") as f:
+                    f.write("12345\n--all --daemon\n")
+                opts = hume.get_daemon_options(12345)
+                self.assertEqual(opts, "--all --daemon")
+
+    def test_get_daemon_options_from_proc_cmdline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # PID file not in pid_dir
+            with patch("hume._get_pid_dir", return_value=tmpdir):
+                # Mock /proc
+                with patch("os.path.isdir", side_effect=lambda p: p == "/proc"):
+                    cmdline_bytes = b"python\x00/path/hume.py\x00-a\x00-p\x00"
+                    with patch("builtins.open", unittest.mock.mock_open(read_data=cmdline_bytes)):
+                        opts = hume.get_daemon_options(55555)
+                        self.assertEqual(opts, "-a -p")
+
+    def test_get_daemon_options_from_ps_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("hume._get_pid_dir", return_value=tmpdir), patch(
+                "os.path.isdir", return_value=False
+            ):
+                ps_res = MagicMock(returncode=0, stdout="/usr/bin/python3 hume.py -b 'Desk' -p\n")
+                with patch("subprocess.run", return_value=ps_res):
+                    opts = hume.get_daemon_options(66666)
+                    self.assertEqual(opts, "-b Desk -p")
+
+    def test_kill_daemon_interactive_displays_options(self) -> None:
+        with patch("hume.get_running_daemon_pids", return_value=[1234, 5678]), patch(
+            "hume.get_daemon_options", side_effect=lambda pid: "-a -p" if pid == 1234 else "--bulbs Desk -p"
+        ), patch("hume.kill_daemon_by_pid", return_value=True), patch("builtins.print") as mock_print:
+            res = hume.kill_daemon_interactive(input_fn=lambda prompt: "1")
+            self.assertTrue(res)
+            mock_print.assert_any_call("Currently running daemon processes:")
+            mock_print.assert_any_call("  [1] PID 1234 (options: -a -p)")
+            mock_print.assert_any_call("  [2] PID 5678 (options: --bulbs Desk -p)")
 
 
 if __name__ == "__main__":

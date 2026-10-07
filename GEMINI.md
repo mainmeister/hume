@@ -31,6 +31,17 @@ uv run python hume.py --list
 
 This will print formatted ASCII tables/grids with the bridge configuration, discovered lights, groups, and devices, and then exit.
 
+### Installing CLI Shell Script
+
+To install a convenient `hume` shell script into a user directory in `$PATH` (e.g. `~/.local/bin`), run with `--install` or `-i`:
+
+```bash
+uv run python hume.py --install
+# or: uv run python hume.py -i
+# Once installed, execute directly from anywhere:
+hume --help
+```
+
 ### Managing Daemon Processes
 
 - **Display running daemon PIDs**:

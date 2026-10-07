@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import random
+import shlex
 import signal
 import subprocess
 import sys
@@ -66,14 +67,138 @@ def _get_pid_dir() -> str:
     return pid_dir
 
 
-def _register_daemon_pid(pid: int) -> None:
+def _format_options_from_args(args: list[str]) -> str:
+    """Format a list of CLI argument strings into a clean shell-quoted options string."""
+    if not args:
+        return ""
+    return shlex.join(args)
+
+
+def _extract_options_from_cmdline(args: list[str]) -> str:
+    """Extract CLI options from a process argument list."""
+    if not args:
+        return ""
+
+    script_idx = -1
+    for idx, arg in enumerate(args):
+        base = os.path.basename(arg)
+        if base in ("hume.py", "main.py") or arg in ("hume.py", "main.py", "./hume.py", "./main.py"):
+            script_idx = idx
+            break
+        if base == "hume" or arg == "hume":
+            script_idx = idx
+            break
+        if arg == "-m" and idx + 1 < len(args) and os.path.basename(args[idx + 1]) in ("hume", "main"):
+            script_idx = idx + 1
+            break
+
+    if script_idx != -1:
+        opts_args = args[script_idx + 1:]
+    else:
+        if args and args[0].startswith("-"):
+            opts_args = args
+        else:
+            opts_args = []
+
+    return _format_options_from_args(opts_args)
+
+
+def _register_daemon_pid(
+    pid: int,
+    options: str | None = None,
+    args: list[str] | None = None,
+) -> None:
     try:
         pid_dir = _get_pid_dir()
         pid_file = os.path.join(pid_dir, str(pid))
-        with open(pid_file, "w") as f:
-            f.write(str(pid))
+        if options is None:
+            if args is not None:
+                options = _format_options_from_args(args)
+            else:
+                options = ""
+        payload = {
+            "pid": pid,
+            "options": options,
+            "args": args if args is not None else [],
+        }
+        with open(pid_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
     except OSError:
         pass
+
+
+def get_daemon_options(pid: int) -> str:
+    """Retrieve the command line options associated with a running daemon process."""
+    # 1. Check PID directory
+    pid_dir = _get_pid_dir()
+    pid_file = os.path.join(pid_dir, str(pid))
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            if content:
+                try:
+                    data = json.loads(content)
+                    if isinstance(data, dict):
+                        if data.get("options"):
+                            return str(data["options"]).strip()
+                        if data.get("args"):
+                            return _format_options_from_args(data["args"])
+                except json.JSONDecodeError:
+                    # Stored as plain text / legacy format
+                    lines = [line.strip() for line in content.splitlines() if line.strip()]
+                    if len(lines) >= 2:
+                        return lines[1]
+        except (OSError, IOError):
+            pass
+
+    # 2. Check /proc on Linux
+    if os.path.isdir("/proc"):
+        cmdline_file = f"/proc/{pid}/cmdline"
+        try:
+            with open(cmdline_file, "rb") as f:
+                raw = f.read()
+            args = [
+                arg.decode("utf-8", errors="replace")
+                for arg in raw.split(b"\x00")
+                if arg
+            ]
+            opts = _extract_options_from_cmdline(args)
+            if opts:
+                return opts
+        except (OSError, IOError, PermissionError):
+            pass
+
+    # 3. Fallback to ps command
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "args="],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            check=False,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            raw_out = proc.stdout.strip()
+            try:
+                args = shlex.split(raw_out)
+            except ValueError:
+                args = raw_out.split()
+            opts = _extract_options_from_cmdline(args)
+            if opts:
+                return opts
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    return ""
+
+
+def format_daemon_process_entry(idx: int, pid: int, options: str | None = None) -> str:
+    """Format a daemon process entry with its index, PID, and command-line options."""
+    if options is None:
+        options = get_daemon_options(pid)
+    opts_str = options.strip() if options and options.strip() else "none"
+    return f"  [{idx}] PID {pid} (options: {opts_str})"
 
 
 def _unregister_daemon_pid(pid: int) -> None:
@@ -259,7 +384,7 @@ def get_running_daemon_pids() -> list[int]:
 
 
 def show_running_daemon_pids(pids: list[int] | None = None) -> list[int]:
-    """Display all currently running daemon PIDs and return the list."""
+    """Display all currently running daemon PIDs with their command line options, and return the list."""
     if pids is None:
         pids = get_running_daemon_pids()
 
@@ -268,7 +393,7 @@ def show_running_daemon_pids(pids: list[int] | None = None) -> list[int]:
     else:
         print("Currently running daemon processes:")
         for idx, pid in enumerate(pids, 1):
-            print(f"  [{idx}] PID {pid}")
+            print(format_daemon_process_entry(idx, pid))
     return pids
 
 
@@ -325,7 +450,7 @@ def kill_daemon_interactive(
 
     print("Currently running daemon processes:")
     for idx, pid in enumerate(pids, 1):
-        print(f"  [{idx}] PID {pid}")
+        print(format_daemon_process_entry(idx, pid))
     print()
 
     while True:
@@ -360,7 +485,7 @@ def kill_daemon_interactive(
             )
 
 
-def fork_daemon_process() -> int:
+def fork_daemon_process(argv: list[str] | None = None) -> int:
     """Fork the current process into background, exit the parent, and display child PID/task ID.
 
     Returns the PID of the running child process.
@@ -372,10 +497,148 @@ def fork_daemon_process() -> int:
             sys.exit(0)
 
     child_pid = os.getpid()
-    _register_daemon_pid(child_pid)
+    if argv is None:
+        argv = sys.argv[1:] if isinstance(sys.argv, list) else []
+    _register_daemon_pid(child_pid, args=argv)
     print(f"Daemon process started with PID: {child_pid}", flush=True)
     logger.info("Daemon process running with PID: %s", child_pid)
     return child_pid
+
+
+def generate_wrapper_script(script_path: str | None = None) -> str:
+    """Generate the contents of the wrapper shell script for running hume.py.
+
+    The wrapper script runs the Python script and forwards all command-line
+    arguments ("$@"). It prefers uv if available, then the project's virtualenv,
+    then python3 / python.
+    """
+    if script_path is None:
+        script_path = os.path.abspath(os.path.realpath(__file__))
+    else:
+        script_path = os.path.abspath(os.path.realpath(script_path))
+
+    project_dir = os.path.dirname(script_path)
+
+    return f"""#!/usr/bin/env bash
+# Wrapper script for hume (Philips Hue CLI utility)
+# Auto-generated by: hume --install
+
+SCRIPT_PATH="{script_path}"
+PROJECT_DIR="{project_dir}"
+
+if command -v uv >/dev/null 2>&1; then
+    exec uv run --project "$PROJECT_DIR" python "$SCRIPT_PATH" "$@"
+elif [ -x "$PROJECT_DIR/.venv/bin/python" ]; then
+    exec "$PROJECT_DIR/.venv/bin/python" "$SCRIPT_PATH" "$@"
+elif command -v python3 >/dev/null 2>&1; then
+    exec python3 "$SCRIPT_PATH" "$@"
+else
+    exec python "$SCRIPT_PATH" "$@"
+fi
+"""
+
+
+def find_install_dir(path_env: str | None = None) -> str | None:
+    """Find a suitable, writable directory in the user's $PATH to install the hume script.
+
+    Priority order:
+    1. Standard user bin directories in $PATH (~/.local/bin, ~/bin) that exist and are writable (or parent writable).
+    2. Other persistent user-home directories in $PATH (excluding project virtualenvs) that are writable.
+    3. Other system directories in $PATH (excluding project virtualenvs) that are writable.
+    4. Any other writable directory in $PATH (including active virtual environments).
+    """
+    path_str = os.getenv("PATH", "") if path_env is None else path_env
+    if not path_str:
+        return None
+
+    raw_entries = path_str.split(os.pathsep)
+    home_dir = os.path.abspath(os.path.expanduser("~"))
+    std_user_bins = {
+        os.path.abspath(os.path.join(home_dir, ".local", "bin")),
+        os.path.abspath(os.path.join(home_dir, "bin")),
+    }
+
+    # Normalize entries and remove duplicates while preserving order
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for entry in raw_entries:
+        entry = entry.strip()
+        if not entry:
+            continue
+        expanded = os.path.abspath(os.path.expanduser(entry))
+        if expanded not in seen:
+            seen.add(expanded)
+            candidates.append(expanded)
+
+    def _is_writable(d: str) -> bool:
+        if os.path.isdir(d):
+            return os.access(d, os.W_OK)
+        if not os.path.exists(d):
+            parent = os.path.dirname(d)
+            return os.path.isdir(parent) and os.access(parent, os.W_OK)
+        return False
+
+    def _is_venv(d: str) -> bool:
+        parts = d.split(os.sep)
+        return any(p in (".venv", "venv", "__pypackages__") for p in parts)
+
+    # 1. Standard user bin directories (~/.local/bin, ~/bin) in PATH
+    for d in candidates:
+        if d in std_user_bins and _is_writable(d):
+            return d
+
+    # 2. Other user-home directories in PATH (excluding venvs)
+    for d in candidates:
+        if d.startswith(home_dir) and not _is_venv(d) and _is_writable(d):
+            return d
+
+    # 3. System directories in PATH (excluding venvs)
+    for d in candidates:
+        if not _is_venv(d) and _is_writable(d):
+            return d
+
+    # 4. Any remaining writable directory in PATH
+    for d in candidates:
+        if _is_writable(d):
+            return d
+
+    return None
+
+
+def install_hume_script(
+    target_dir: str | None = None,
+    script_path: str | None = None,
+    path_env: str | None = None,
+) -> tuple[bool, str]:
+    """Install the hume executable shell script into a directory in $PATH.
+
+    Returns (success, destination_path).
+    """
+    if target_dir is None:
+        target_dir = find_install_dir(path_env=path_env)
+
+    if not target_dir:
+        logger.error(
+            "Could not find a writable directory in $PATH. "
+            "Please ensure a directory such as ~/.local/bin or ~/bin is in your PATH and writable."
+        )
+        return False, ""
+
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+        dest_path = os.path.join(target_dir, "hume")
+        content = generate_wrapper_script(script_path=script_path)
+
+        with open(dest_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        # Set executable permissions (rwxr-xr-x)
+        os.chmod(dest_path, 0o755)
+        logger.info("Successfully installed hume shell script to %s", dest_path)
+        return True, dest_path
+    except OSError as e:
+        logger.error("Failed to install hume shell script to %s: %s", target_dir, e)
+        return False, ""
 
 
 def load_config() -> Dict[str, Any]:
@@ -1205,7 +1468,7 @@ def run_mood_application(
         return
 
     if daemon:
-        fork_daemon_process()
+        fork_daemon_process(argv=argv)
 
     if stop_event is None:
         stop_event = threading.Event()
@@ -1285,6 +1548,7 @@ def cli_entrypoint(argv: list[str] | None = None) -> int:
 
 Options:
   -h, --help                  Show this help message and exit
+  -i, --install               Install hume shell script to a directory in $PATH and exit
   -l, --list                  Fetch and display Hue bridge configuration, then exit
   -a, --all                   Use all discovered color bulbs for mood lighting
   -d, -p, --daemon            Run in non-interactive daemon mode (wait for SIGTERM/SIGINT)
@@ -1307,6 +1571,15 @@ Environment:
 """
         )
         return 0
+
+    if any(arg in ("-i", "--install") for arg in argv):
+        cfg = load_config()
+        setup_logging(cfg.get("log_level"))
+        success, dest = install_hume_script()
+        if success:
+            print(f"hume installed successfully to {dest}")
+            return 0
+        return 1
 
     if any(
         arg in ("-P", "--show-daemons", "--pids", "--show-pids", "--list-daemons", "--daemons")

@@ -103,6 +103,7 @@ Usage: python hume.py [options]
 
 Options:
   -h, --help                  Show help message and exit
+  -i, --install               Install hume wrapper script to a directory in $PATH and exit
   -l, --list                  Fetch and display Hue bridge configuration, then exit
   -a, --all                   Use all discovered color bulbs for mood lighting
   -d, -p, --daemon            Run in non-interactive daemon mode (wait for SIGTERM/SIGINT)
@@ -116,6 +117,15 @@ Options:
 ```
 
 ### Example Commands
+
+- **Install `hume` shell command into user's `$PATH`**:
+  ```bash
+  uv run python hume.py --install
+  # or: uv run python hume.py -i
+  # Once installed, run 'hume' directly from anywhere:
+  hume --help
+  hume --all
+  ```
 
 - **Start interactive mood lighting across all bulbs**:
   ```bash
